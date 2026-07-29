@@ -175,3 +175,8 @@ x86/
 
 # Built Visual Studio Code Extensions
 *.vsix
+### Unity Packages override
+# The NuGet rules above ("**/[Pp]ackages/*") also match Unity's Packages/ folder,
+# which would drop manifest.json and packages-lock.json from version control.
+!/Packages/
+!/Packages/**
