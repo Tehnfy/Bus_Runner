@@ -7,6 +7,7 @@ public enum RunState
     Intro,
     Running,
     Dead,
+    Finished,
 }
 
 /// <summary>
@@ -18,6 +19,7 @@ public class RunManager : MonoBehaviour
 
     [Header("Refs")]
     [SerializeField] PlayerController player;
+    [SerializeField] FinishSequence finishSequence;
 
     [Header("Death")]
     [Tooltip("Pause before the player is put back at the last checkpoint.")]
@@ -31,11 +33,13 @@ public class RunManager : MonoBehaviour
     readonly List<Checkpoint> reached = new List<Checkpoint>();
     Checkpoint lastCheckpoint;
     float runStartTime;
+    float runEndTime = -1f;
 
     void Awake()
     {
         Instance = this;
         if (player == null) player = FindFirstObjectByType<PlayerController>();
+        if (finishSequence == null) finishSequence = FindFirstObjectByType<FinishSequence>();
     }
 
     void Start()
@@ -76,6 +80,19 @@ public class RunManager : MonoBehaviour
         }
     }
 
+    /// <summary>Called by FinishLine when the player crosses it.</summary>
+    public void Finish()
+    {
+        if (State != RunState.Running) return;
+        State = RunState.Finished;
+        runEndTime = Time.time;
+        Debug.Log($"[RunManager] Finished at x={player.transform.position.x:F1} after {RunTime:F1}s");
+
+        // Control is not taken away here — the runner has to keep running while the
+        // camera pulls back. FinishSequence stops them once the shot is over.
+        if (finishSequence != null) finishSequence.Play();
+    }
+
     /// <summary>Called by Obstacle on contact.</summary>
     public void Kill()
     {
@@ -97,6 +114,7 @@ public class RunManager : MonoBehaviour
         State = RunState.Running;
     }
 
-    /// <summary>Seconds since the run began — used to sanity-check the 90-120s target.</summary>
-    public float RunTime => State == RunState.Intro ? 0f : Time.time - runStartTime;
+    /// <summary>Seconds since the run began, frozen at the finish line — used to sanity-check the 90-120s target.</summary>
+    public float RunTime =>
+        State == RunState.Intro ? 0f : (runEndTime >= 0f ? runEndTime : Time.time) - runStartTime;
 }

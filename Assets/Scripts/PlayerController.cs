@@ -33,6 +33,17 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Clearance kept above the highest measured bone while pose-driven.")]
     [SerializeField] float slidePoseClearance = 0.06f;
 
+    [Header("Landing roll")]
+    [Tooltip("Airborne at least this long and the landing becomes a roll. A plain jump is only ~0.67s " +
+             "in the air, so this fires on drops off rooftops rather than on every hop.")]
+    [SerializeField] float rollAirTime = 0.8f;
+    [Range(0f, 0.5f)]
+    [Tooltip("Share of the roll during which jump and slide are ignored. Hard-capped at half the clip — " +
+             "past that point the player can act out of the roll.")]
+    [SerializeField] float rollInputLockShare = 0.5f;
+    [Tooltip("Only used if the controller has no clip named 'Roll'. The real length is read from the clip.")]
+    [SerializeField] float rollDurationFallback = 1.78f;
+
     [Header("Input buffering")]
     [Tooltip("A slide pressed while airborne is remembered this long and fires on touchdown, instead of " +
              "being swallowed. Jumps are never buffered — a late jump press is simply dropped.")]
@@ -58,6 +69,19 @@ public class PlayerController : MonoBehaviour
 
     bool controlEnabled;
 
+    // Set for the outro: legs keep moving, but jump and slide are ignored.
+    bool actionsLocked;
+
+    // Roll: when we left the ground (-1 while grounded), and how long the landing
+    // roll owns the input. Separate from lastGroundedTime, which TryJump clears to
+    // burn the coyote window and so cannot measure a fall.
+    float leftGroundAt = -1f;
+    float rollEndsAt = -1f;
+    float rollInputLockUntil = -1f;
+    float rollDuration;
+
+    const string RollClipName = "Roll";
+
     // A slide press that could not run yet, kept until it lands or goes stale.
     float bufferedSlideAt = -999f;
 
@@ -80,6 +104,12 @@ public class PlayerController : MonoBehaviour
     public bool IsSliding => Time.time < slideEndsAt;
     public bool IsGrounded => cc.isGrounded || Time.time - lastGroundedTime < coyoteTime;
 
+    /// <summary>True for the length of the roll clip after a long fall.</summary>
+    public bool IsRolling => Time.time < rollEndsAt;
+
+    /// <summary>Jump and slide are swallowed while this holds — the outro, or the first half of a roll.</summary>
+    bool ActionsBlocked => actionsLocked || Time.time < rollInputLockUntil;
+
     /// <summary>0 at the start of a slide, 1 at its end. Reads 1 when not sliding.</summary>
     public float SlideProgress =>
         IsSliding && slideDuration > 0f
@@ -99,6 +129,7 @@ public class PlayerController : MonoBehaviour
 
         CacheSilhouetteBones();
         CalibrateHeadOffset();   // bind pose is close enough to standing; LateUpdate refines if not
+        ResolveRollDuration();
 
         // Intro holds control until RunManager.BeginRun().
         controlEnabled = false;
@@ -116,9 +147,57 @@ public class PlayerController : MonoBehaviour
         if (animator != null) animator.speed = enabled ? 1f : 0f;
     }
 
+    /// <summary>
+    /// Takes jump and slide away without stopping the run — used by FinishSequence so the
+    /// runner keeps running through the pull-back but cannot act during the shot.
+    /// </summary>
+    public void LockActions(bool locked)
+    {
+        actionsLocked = locked;
+        if (locked)
+        {
+            EndSlide();
+            ClearBufferedSlide();
+        }
+    }
+
     void ClearBufferedSlide()
     {
         bufferedSlideAt = -999f;
+    }
+
+    /// <summary>
+    /// Reads the roll length off the clip rather than trusting a number typed into the
+    /// inspector, so retiming or replacing the animation cannot leave the input lock
+    /// running long or short.
+    /// </summary>
+    void ResolveRollDuration()
+    {
+        rollDuration = rollDurationFallback;
+        if (animator == null || animator.runtimeAnimatorController == null) return;
+
+        foreach (var clip in animator.runtimeAnimatorController.animationClips)
+        {
+            if (clip == null || clip.name != RollClipName) continue;
+            rollDuration = clip.length;
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Landing after a long fall. The runner keeps moving — a roll carries momentum —
+    /// but jump and slide are swallowed for the first half of the clip.
+    ///
+    /// A slide pressed during the fall is deliberately left in the buffer: it fires the
+    /// moment the lock lifts, so the drop costs the player the input's timing but never
+    /// the input itself.
+    /// </summary>
+    void BeginRoll()
+    {
+        EndSlide();
+        rollEndsAt = Time.time + rollDuration;
+        rollInputLockUntil = Time.time + rollDuration * Mathf.Clamp(rollInputLockShare, 0f, 0.5f);
+        if (animator != null) animator.SetTrigger("Roll");
     }
 
     void CacheSilhouetteBones()
@@ -183,11 +262,14 @@ public class PlayerController : MonoBehaviour
 
         if (cc.isGrounded) lastGroundedTime = Time.time;
 
+        TrackAirborne();
+
         // Expire the slide
         if (slideEndsAt > 0f && Time.time >= slideEndsAt) EndSlide();
 
-        // A slide pressed in mid-air gets its chance the moment we touch down.
-        if (cc.isGrounded && Time.time - bufferedSlideAt <= slideBufferTime) TrySlide();
+        // A slide pressed in mid-air gets its chance the moment we touch down — but not
+        // while a roll owns the input, or it would cancel the roll on the landing frame.
+        if (cc.isGrounded && !ActionsBlocked && Time.time - bufferedSlideAt <= slideBufferTime) TrySlide();
 
         // Gravity — heavier on the way down
         if (cc.isGrounded && verticalVelocity < 0f)
@@ -204,18 +286,40 @@ public class PlayerController : MonoBehaviour
             transform.position = new Vector3(p.x, p.y, lockedZ);
     }
 
+    /// <summary>
+    /// Measures how long we have been off the ground and turns a long enough fall into a
+    /// roll on touchdown. A one-frame blip in CharacterController.isGrounded over a seam
+    /// reads as a fraction of a second of air, well under the threshold.
+    /// </summary>
+    void TrackAirborne()
+    {
+        if (!cc.isGrounded)
+        {
+            if (leftGroundAt < 0f) leftGroundAt = Time.time;
+            return;
+        }
+
+        if (leftGroundAt < 0f) return;   // been on the ground a while
+
+        float airTime = Time.time - leftGroundAt;
+        leftGroundAt = -1f;
+        if (airTime >= rollAirTime) BeginRoll();
+    }
+
     public void Jump()
     {
         // Not buffered: a jump pressed too early is dropped, so it can never
         // surprise the player with a hop a moment after they land.
-        if (!controlEnabled) return;
+        if (!controlEnabled || ActionsBlocked) return;
         TryJump();
     }
 
     public void Slide()
     {
-        if (!controlEnabled) return;
-        if (!TrySlide()) bufferedSlideAt = Time.time;   // hold it for touchdown
+        if (!controlEnabled || actionsLocked) return;
+        // A press during the locked half of a roll is buffered, not dropped, so the roll
+        // delays the action instead of eating it.
+        if (Time.time < rollInputLockUntil || !TrySlide()) bufferedSlideAt = Time.time;
     }
 
     bool TryJump()

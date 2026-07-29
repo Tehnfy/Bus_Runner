@@ -23,7 +23,8 @@ public class IntroSequence : MonoBehaviour
     [SerializeField] float blendDuration = 1.5f;
 
     [Header("Staging")]
-    [Tooltip("Hidden once the intro is over — bus interior, kid, etc.")]
+    [Tooltip("Bus interior, kid, etc. If it carries a BusRig it is kept alive and set travelling with " +
+             "the runner so the outro can pull back into it; otherwise it is hidden as dead weight.")]
     [SerializeField] GameObject introStaging;
 
     [Header("Skip")]
@@ -60,8 +61,23 @@ public class IntroSequence : MonoBehaviour
 
         yield return new WaitForSeconds(blendDuration * 0.5f);
 
-        if (introStaging != null) introStaging.SetActive(false);
+        HandOffStaging();
         finished = true;
+    }
+
+    /// <summary>
+    /// The bus used to be switched off here, since nothing looked at it again. It is now
+    /// the outro's set, so when a BusRig is present the staging stays live and starts
+    /// travelling with the runner instead. It sits behind the game camera either way, so
+    /// keeping it on costs nothing on screen.
+    /// </summary>
+    void HandOffStaging()
+    {
+        if (introStaging == null) return;
+
+        var rig = introStaging.GetComponent<BusRig>();
+        if (rig != null) rig.BeginFollowing();
+        else introStaging.SetActive(false);
     }
 
     static bool SkipPressed()
