@@ -7,7 +7,7 @@ using UnityEngine;
 /// One-shot wiring for the level-finish sequence. Menu: Bus Runner > Set Up Finish Sequence.
 ///
 /// Builds and connects, in the open scene:
-///   Lane/Finish_line         trigger box at the end of the lane
+///   Lane/Finish_trigger      tall trigger box at the end of the lane
 ///   IntroStaging             gains a BusRig so the bus travels with the runner
 ///   IntroStaging/ApproachCam waypoint outside the bus window
 ///   IntroStaging/OutroCam    the shot at the bus window, beside the kid
@@ -18,9 +18,18 @@ using UnityEngine;
 /// </summary>
 static class FinishSequenceSetup
 {
-    // Past the last obstacle (a building at x=843), with room to keep running
-    // through the pull-back. The ground runs to x=990.
-    const float FinishLineX = 860f;
+    // Only used when the level has no hand-placed Finish_line marker to read the
+    // position off. Past the last obstacle (a building ending at x=846.7), with room
+    // to keep running through the pull-back. The ground runs to x=990.
+    const float FallbackFinishLineX = 950f;
+
+    // The visual marker the level designer places on the road. Its own collider and
+    // scale are left alone — it is read for its X and nothing else.
+    const string MarkerName = "Finish_line";
+
+    // The trigger is a separate object so it can be tall and wide without stretching
+    // the marker's mesh, and so re-running this never disturbs hand placement.
+    const string TriggerName = "Finish_trigger";
 
     // All camera positions are local to the BusRig, so they travel with the bus.
     //
@@ -126,24 +135,38 @@ static class FinishSequenceSetup
         return cam;
     }
 
+    /// <summary>
+    /// Puts the finish trigger where the level's Finish_line marker already stands, or at
+    /// the fallback X when there is no marker. The marker itself is never touched — it is
+    /// a scaled, hand-placed mesh, and rewriting its transform or its collider to trigger
+    /// dimensions would deform the visual.
+    /// </summary>
     static void SetUpFinishLine(GameObject lane)
     {
-        var existing = Find("Finish_line");
-        var go = existing != null ? existing : new GameObject("Finish_line");
+        var marker = Find(MarkerName);
+        float x = marker != null ? marker.transform.position.x : FallbackFinishLineX;
+        if (marker == null)
+            Debug.LogWarning($"[FinishSequenceSetup] No '{MarkerName}' in the scene — " +
+                             $"putting the finish trigger at the fallback x={FallbackFinishLineX}.");
+
+        var existing = Find(TriggerName);
+        var go = existing != null ? existing : new GameObject(TriggerName);
         if (existing == null)
         {
-            Undo.RegisterCreatedObjectUndo(go, "Create Finish_line");
-            if (lane != null) Undo.SetTransformParent(go.transform, lane.transform, "Parent Finish_line");
+            Undo.RegisterCreatedObjectUndo(go, "Create " + TriggerName);
+            if (lane != null) Undo.SetTransformParent(go.transform, lane.transform, "Parent " + TriggerName);
         }
 
-        Undo.RecordObject(go.transform, "Place Finish_line");
-        go.transform.position = new Vector3(FinishLineX, 0f, 0f);
+        Undo.RecordObject(go.transform, "Place " + TriggerName);
+        go.transform.position = new Vector3(x, 0f, 0f);
         go.transform.rotation = Quaternion.identity;
+        // Scale one, so the box dimensions below are world units regardless of the
+        // scaling on the marker or on Lane.
         go.transform.localScale = Vector3.one;
 
         var box = go.GetComponent<BoxCollider>();
         if (box == null) box = Undo.AddComponent<BoxCollider>(go);
-        Undo.RecordObject(box, "Configure Finish_line");
+        Undo.RecordObject(box, "Configure " + TriggerName);
         box.isTrigger = true;
         // Tall enough to catch a player arriving along a rooftop, and thick enough
         // that 8 m/s cannot step over it in a single frame.
@@ -151,6 +174,9 @@ static class FinishSequenceSetup
         box.size = new Vector3(2f, 20f, 8f);
 
         if (go.GetComponent<FinishLine>() == null) Undo.AddComponent<FinishLine>(go);
+
+        Debug.Log($"[FinishSequenceSetup] Finish trigger at x={x:F1}"
+                  + (marker != null ? $" (read off '{MarkerName}')." : " (fallback)."));
     }
 
     static FinishSequence SetUpFinishSequence(

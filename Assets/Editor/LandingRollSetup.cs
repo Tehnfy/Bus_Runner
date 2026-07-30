@@ -12,11 +12,19 @@ using UnityEngine;
 /// "Roll" so PlayerController can measure its length at runtime, and adds the state
 /// and transitions to PlayerAnimator.
 ///
+/// The clip is trimmed to start at the landing. Frames 0-4 are the descent, which put the
+/// feet 0.515 above the capsule base against ~0.10 for a grounded run; BeginRoll fires on
+/// touchdown, so untrimmed those frames render as a hover.
+///
 /// Safe to run more than once — it reuses whatever it already made.
 /// </summary>
 static class LandingRollSetup
 {
     const string RollFbx = "Assets/Animations/Falling To Roll.fbx";
+
+    // First frame with the feet actually down, measured per frame off the imported pose.
+    const float LandingFrame = 5f;
+    const float LastFrame = 107f;
     const string CharacterFbx = "Assets/Models/Ch36_nonPBR.fbx";
     const string ControllerPath = "Assets/Animations/PlayerAnimator.controller";
     const string ClipName = "Roll";
@@ -45,8 +53,9 @@ static class LandingRollSetup
 
         WireController(controller, clip);
         AssetDatabase.SaveAssets();
-        Debug.Log($"[LandingRollSetup] Done. '{ClipName}' is {clip.length:F2}s, so the input lock runs " +
-                  $"at most {clip.length * 0.5f:F2}s.");
+        Debug.Log($"[LandingRollSetup] Done. '{ClipName}' is {clip.length:F2}s. The input lock after " +
+                  $"touchdown is set separately on the player (rollInputLockDuration) and is not " +
+                  $"derived from this length.");
     }
 
     /// <summary>
@@ -81,16 +90,25 @@ static class LandingRollSetup
         }
 
         // PlayerController finds the clip by name to read its length, so the Mixamo take
-        // name will not do.
-        if (importer.clipAnimations.Length == 0 || importer.clipAnimations[0].name != ClipName)
+        // name will not do — and the descent has to come off the front.
+        var existing = importer.clipAnimations;
+        bool needsFixing = existing.Length == 0
+                           || existing[0].name != ClipName
+                           || !Mathf.Approximately(existing[0].firstFrame, LandingFrame)
+                           || !Mathf.Approximately(existing[0].lastFrame, LastFrame);
+
+        if (needsFixing)
         {
-            var clips = importer.defaultClipAnimations;
+            var clips = existing.Length > 0 ? existing : importer.defaultClipAnimations;
             if (clips.Length == 0)
             {
                 Debug.LogError($"[LandingRollSetup] {RollFbx} contains no animation take.");
                 return null;
             }
             clips[0].name = ClipName;
+            clips[0].loopTime = false;
+            clips[0].firstFrame = LandingFrame;
+            clips[0].lastFrame = LastFrame;
             importer.clipAnimations = new[] { clips[0] };
             importer.SaveAndReimport();
         }
@@ -139,8 +157,8 @@ static class LandingRollSetup
             back.duration = ExitToRunDuration;
         }
 
-        // Out: interrupted by an action. PlayerController only lets these through after
-        // half the clip, which is what keeps the roll from swallowing input outright.
+        // Out: interrupted by an action. PlayerController blocks these for only a fraction of a
+        // second after touchdown, so the roll can be cancelled almost immediately on landing.
         AddInterrupt(roll, jump, "Jump");
         AddInterrupt(roll, slide, "Slide");
 

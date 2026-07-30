@@ -37,17 +37,30 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Airborne at least this long and the landing becomes a roll. A plain jump is only ~0.67s " +
              "in the air, so this fires on drops off rooftops rather than on every hop.")]
     [SerializeField] float rollAirTime = 0.8f;
-    [Range(0f, 0.5f)]
-    [Tooltip("Share of the roll during which jump and slide are ignored. Hard-capped at half the clip — " +
-             "past that point the player can act out of the roll.")]
-    [SerializeField] float rollInputLockShare = 0.5f;
+    [Tooltip("Seconds after touchdown during which jump and slide are ignored. Deliberately short — " +
+             "long enough that the interrupt reads as a cancel rather than a pop, short enough that " +
+             "the runner can act as soon as they land. The roll animation keeps playing either way; " +
+             "an action just cuts out of it. Clamped to the roll length.")]
+    [SerializeField] float rollInputLockDuration = 0.12f;
     [Tooltip("Only used if the controller has no clip named 'Roll'. The real length is read from the clip.")]
-    [SerializeField] float rollDurationFallback = 1.78f;
+    [SerializeField] float rollDurationFallback = 1.7f;
+    [Tooltip("Cancel the roll clip's turn so the runner keeps facing down the lane. The clip is a " +
+             "shoulder roll and swings the body off-lane on the way through; the lane is 2.5D, so " +
+             "there is nowhere for that turn to go.")]
+    [SerializeField] bool cancelRollYaw = true;
+    [Range(0f, 0.5f)]
+    [Tooltip("Share of the roll over which the yaw correction is eased back out, so handing back " +
+             "to the run does not pop.")]
+    [SerializeField] float rollYawReleaseShare = 0.2f;
+    [Tooltip("Degrees per second the correction may change. Stops a bad frame snapping the model.")]
+    [SerializeField] float rollYawMaxRate = 540f;
 
-    [Header("Input buffering")]
-    [Tooltip("A slide pressed while airborne is remembered this long and fires on touchdown, instead of " +
-             "being swallowed. Jumps are never buffered — a late jump press is simply dropped.")]
-    [SerializeField] float slideBufferTime = 1f;
+    [Header("Landing")]
+    [Tooltip("A slide asked for in mid-air fires on touchdown instead of being lost to the landing " +
+             "frame. Only airborne presses are held, and only this briefly. A press made while " +
+             "already sliding is always dropped, which is what stops a double tap producing a " +
+             "second slide when the first one ends.")]
+    [SerializeField] float slideLandingGrace = 0.2f;
 
     [Header("Crashing")]
     [Tooltip("A surface counts as a wall when its normal points back down the lane at least this much. " +
@@ -67,6 +80,9 @@ public class PlayerController : MonoBehaviour
     float standHeight;
     Vector3 standCenter;
 
+    // The one orientation the capsule is ever allowed to have.
+    Quaternion facing;
+
     bool controlEnabled;
 
     // Set for the outro: legs keep moving, but jump and slide are ignored.
@@ -82,8 +98,9 @@ public class PlayerController : MonoBehaviour
 
     const string RollClipName = "Roll";
 
-    // A slide press that could not run yet, kept until it lands or goes stale.
-    float bufferedSlideAt = -999f;
+    // A mid-air slide press, held until touchdown or until it goes stale. Never set by a press
+    // made while already sliding, and cleared the moment it is used.
+    float airborneSlideAt = -999f;
 
     // Bones that define the runner's silhouette. Arms are deliberately absent.
     static readonly HumanBodyBones[] SilhouetteBoneIds =
@@ -96,6 +113,12 @@ public class PlayerController : MonoBehaviour
     };
     Transform[] silhouetteBones;
     Transform headBone;
+
+    // Skeleton root, used to take the turn back out of the roll.
+    Transform hipsBone;
+    // Correction currently applied, in degrees. Rate-limited towards its target rather than
+    // written outright, and decays back to zero once the roll releases.
+    float rollYawApplied;
     // How much mesh sits above the head bone (skull, hair). Calibrated from the standing pose,
     // because the head bone alone sits well below the top of the model.
     float headTopOffset;
@@ -107,7 +130,7 @@ public class PlayerController : MonoBehaviour
     /// <summary>True for the length of the roll clip after a long fall.</summary>
     public bool IsRolling => Time.time < rollEndsAt;
 
-    /// <summary>Jump and slide are swallowed while this holds — the outro, or the first half of a roll.</summary>
+    /// <summary>Jump and slide are swallowed while this holds — the outro, or a landing roll's brief lock.</summary>
     bool ActionsBlocked => actionsLocked || Time.time < rollInputLockUntil;
 
     /// <summary>0 at the start of a slide, 1 at its end. Reads 1 when not sliding.</summary>
@@ -125,7 +148,8 @@ public class PlayerController : MonoBehaviour
         standCenter = cc.center;
         lockedZ = transform.position.z;
 
-        transform.rotation = Quaternion.Euler(0f, facingYaw, 0f);
+        facing = Quaternion.Euler(0f, facingYaw, 0f);
+        transform.rotation = facing;
 
         CacheSilhouetteBones();
         CalibrateHeadOffset();   // bind pose is close enough to standing; LateUpdate refines if not
@@ -142,7 +166,7 @@ public class PlayerController : MonoBehaviour
         {
             verticalVelocity = 0f;
             EndSlide();
-            ClearBufferedSlide();
+            airborneSlideAt = -999f;
         }
         if (animator != null) animator.speed = enabled ? 1f : 0f;
     }
@@ -157,13 +181,8 @@ public class PlayerController : MonoBehaviour
         if (locked)
         {
             EndSlide();
-            ClearBufferedSlide();
+            airborneSlideAt = -999f;
         }
-    }
-
-    void ClearBufferedSlide()
-    {
-        bufferedSlideAt = -999f;
     }
 
     /// <summary>
@@ -185,18 +204,17 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Landing after a long fall. The runner keeps moving — a roll carries momentum —
-    /// but jump and slide are swallowed for the first half of the clip.
-    ///
-    /// A slide pressed during the fall is deliberately left in the buffer: it fires the
-    /// moment the lock lifts, so the drop costs the player the input's timing but never
-    /// the input itself.
+    /// Landing after a long fall. The runner keeps moving — a roll carries momentum — and jump
+    /// and slide are swallowed only for rollInputLockDuration, a fraction of a second, so the
+    /// roll never costs the player control of the landing. Nothing is remembered: a press inside
+    /// that window is dropped, not queued.
     /// </summary>
     void BeginRoll()
     {
         EndSlide();
+        rollYawApplied = 0f;
         rollEndsAt = Time.time + rollDuration;
-        rollInputLockUntil = Time.time + rollDuration * Mathf.Clamp(rollInputLockShare, 0f, 0.5f);
+        rollInputLockUntil = Time.time + Mathf.Clamp(rollInputLockDuration, 0f, rollDuration);
         if (animator != null) animator.SetTrigger("Roll");
     }
 
@@ -204,9 +222,83 @@ public class PlayerController : MonoBehaviour
     {
         if (animator == null || !animator.isHuman) return;
         headBone = animator.GetBoneTransform(HumanBodyBones.Head);
+        hipsBone = animator.GetBoneTransform(HumanBodyBones.Hips);
         silhouetteBones = new Transform[SilhouetteBoneIds.Length];
         for (int i = 0; i < SilhouetteBoneIds.Length; i++)
             silhouetteBones[i] = animator.GetBoneTransform(SilhouetteBoneIds[i]);
+    }
+
+    /// <summary>
+    /// How far the animated body is turned about the vertical, in degrees, as a swing-twist
+    /// decomposition of the hips' rotation.
+    ///
+    /// This replaced a version that measured the heading of the hip line. That could not work:
+    /// the roll inverts the body, and once inverted the hip line's flat projection both reverses
+    /// and shrinks, so its heading is meaningless exactly across the middle of the roll where the
+    /// turn actually happens. Reading the twist straight off the quaternion has no such blind
+    /// spot, needs no reference pose, and cannot drift, because it is an absolute measure of the
+    /// current pose rather than an integral of how it got there.
+    ///
+    /// Returns false only in the genuinely degenerate case: a half turn about a horizontal axis,
+    /// where the vertical component is undefined.
+    /// </summary>
+    bool TryMeasureBodyYaw(out float twistDegrees)
+    {
+        twistDegrees = 0f;
+        if (hipsBone == null) return false;
+
+        var q = Quaternion.Inverse(transform.rotation) * hipsBone.rotation;
+        if (q.w < 0f) q = new Quaternion(-q.x, -q.y, -q.z, -q.w);   // canonical, so the sign is stable
+
+        var proj = Vector3.Project(new Vector3(q.x, q.y, q.z), Vector3.up);
+        if (proj.sqrMagnitude + q.w * q.w < 1e-8f) return false;
+
+        var twist = new Quaternion(proj.x, proj.y, proj.z, q.w);
+        twist.Normalize();
+
+        twistDegrees = 2f * Mathf.Atan2(twist.y, twist.w) * Mathf.Rad2Deg;
+        if (twistDegrees > 180f) twistDegrees -= 360f;
+        else if (twistDegrees < -180f) twistDegrees += 360f;
+        return true;
+    }
+
+    /// <summary>1 through the body of the roll, eased to 0 over its final share.</summary>
+    float RollYawCorrectionWeight()
+    {
+        if (!cancelRollYaw || !IsRolling || rollDuration <= 0f) return 0f;
+        float release = rollDuration * Mathf.Clamp(rollYawReleaseShare, 0f, 0.5f);
+        if (release <= 0f) return 1f;
+        return Mathf.Clamp01((rollEndsAt - Time.time) / release);
+    }
+
+    /// <summary>
+    /// Turns the animated body back onto the lane. Applied to the skeleton root, so the whole
+    /// pose swings with it, and pivoted on the capsule's own axis so the correction cannot shove
+    /// the model sideways out of the lane.
+    ///
+    /// The applied angle is rate-limited so no single frame can snap the model, and eased back out
+    /// at the end of the roll as the run pose takes over.
+    /// </summary>
+    void ApplyRollYawCorrection()
+    {
+        if (hipsBone == null) return;
+
+        float weight = RollYawCorrectionWeight();
+        float target = 0f;
+        if (weight > 0f)
+        {
+            // Undo the whole measured twist, so the tumble stays in the lane plane. Peaks at
+            // about 50 degrees mid-roll and settles near 18; both are removed.
+            target = TryMeasureBodyYaw(out float twist) ? -twist * weight
+                                                        : rollYawApplied;   // degenerate: coast
+        }
+
+        rollYawApplied = Mathf.MoveTowardsAngle(rollYawApplied, target, rollYawMaxRate * Time.deltaTime);
+        if (Mathf.Abs(rollYawApplied) < 0.01f) return;
+
+        var fix = Quaternion.AngleAxis(rollYawApplied, Vector3.up);
+        hipsBone.rotation = fix * hipsBone.rotation;
+        hipsBone.position = transform.position + fix * (hipsBone.position - transform.position);
     }
 
     /// <summary>
@@ -245,9 +337,17 @@ public class PlayerController : MonoBehaviour
     /// </summary>
     void LateUpdate()
     {
+        // The runner faces down the lane and never tips. Bones tumble freely — the roll
+        // leans the body well over to one side — but the capsule's own orientation is
+        // pinned here, after the Animator has written the pose, so no clip, no root
+        // motion and no stray write can leave the character rotated on Z or X.
+        if (transform.rotation != facing) transform.rotation = facing;
+
         if (!controlEnabled || animator == null || !animator.isHuman) return;
 
-        if (!headOffsetCalibrated && !IsSliding) CalibrateHeadOffset();
+        if (!headOffsetCalibrated && !IsSliding && !IsRolling) CalibrateHeadOffset();
+
+        ApplyRollYawCorrection();
 
         if (!slideCapsuleFollowsPose || !IsSliding) return;
 
@@ -267,9 +367,13 @@ public class PlayerController : MonoBehaviour
         // Expire the slide
         if (slideEndsAt > 0f && Time.time >= slideEndsAt) EndSlide();
 
-        // A slide pressed in mid-air gets its chance the moment we touch down — but not
-        // while a roll owns the input, or it would cancel the roll on the landing frame.
-        if (cc.isGrounded && !ActionsBlocked && Time.time - bufferedSlideAt <= slideBufferTime) TrySlide();
+        // Fire a slide asked for in the air the moment the feet are down. Consumed before the
+        // attempt, so a failure cannot leave it to retry on a later frame.
+        if (cc.isGrounded && !ActionsBlocked && Time.time - airborneSlideAt <= slideLandingGrace)
+        {
+            airborneSlideAt = -999f;
+            TrySlide();
+        }
 
         // Gravity — heavier on the way down
         if (cc.isGrounded && verticalVelocity < 0f)
@@ -284,6 +388,15 @@ public class PlayerController : MonoBehaviour
         var p = transform.position;
         if (!Mathf.Approximately(p.z, lockedZ))
             transform.position = new Vector3(p.x, p.y, lockedZ);
+
+        // The Jump state leaves on this rather than on clip time. Air time depends on what the
+        // runner lands on — hopping up onto a rooftop cuts it to a fraction of the clip — so a
+        // fixed exit time left Jump playing while the runner was already up and running.
+        //
+        // Set after the move, so isGrounded is this frame's. Rising counts as airborne even on
+        // the frame the jump starts, before the CharacterController reports leaving the floor,
+        // or Jump would hand straight back to Run on the frame it was entered.
+        if (animator != null) animator.SetBool("Grounded", cc.isGrounded && verticalVelocity <= 0f);
     }
 
     /// <summary>
@@ -316,10 +429,18 @@ public class PlayerController : MonoBehaviour
 
     public void Slide()
     {
-        if (!controlEnabled || actionsLocked) return;
-        // A press during the locked half of a roll is buffered, not dropped, so the roll
-        // delays the action instead of eating it.
-        if (Time.time < rollInputLockUntil || !TrySlide()) bufferedSlideAt = Time.time;
+        if (!controlEnabled || ActionsBlocked) return;
+        if (TrySlide()) return;
+
+        // Rejected. Exactly one kind of rejection is worth holding: an airborne press, which is
+        // a player asking to slide the moment they land. Holding it covers the touchdown frame,
+        // where cc.isGrounded can still read false because the input router and this script both
+        // run in Update in no guaranteed order.
+        //
+        // A press made during a slide is dropped outright. Holding that was the old bug: it sat
+        // in the buffer through the whole slide and then fired as a second, unasked-for duck the
+        // instant the first expired.
+        if (!IsSliding) airborneSlideAt = Time.time;
     }
 
     bool TryJump()
@@ -338,20 +459,21 @@ public class PlayerController : MonoBehaviour
         verticalVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
         lastGroundedTime = -999f;
         if (animator != null) animator.SetTrigger("Jump");
-        ClearBufferedSlide();
         return true;
     }
 
     bool TrySlide()
     {
-        // Real ground contact only. Coyote time is a jump forgiveness window; using it
-        // here would allow a mid-air duck and would stop the buffer from ever engaging.
+        // Real ground contact only. Coyote time is a jump forgiveness window; using it here
+        // would let the runner duck in mid-air.
+        //
+        // Returning false while already sliding is what makes a second tap a no-op rather
+        // than a queued second slide — the trigger is never set, so nothing can replay it.
         if (!cc.isGrounded || IsSliding) return false;
         slideEndsAt = Time.time + slideDuration;
         cc.height = standHeight * slideHeightFraction;
         cc.center = new Vector3(standCenter.x, cc.height * 0.5f, standCenter.z);
         if (animator != null) animator.SetTrigger("Slide");
-        ClearBufferedSlide();
         return true;
     }
 
@@ -386,7 +508,7 @@ public class PlayerController : MonoBehaviour
     public void Teleport(Vector3 position)
     {
         EndSlide();
-        ClearBufferedSlide();   // a press from before the death must not fire on respawn
+        airborneSlideAt = -999f;   // a press from before the death must not fire on respawn
         verticalVelocity = 0f;
         cc.enabled = false;
         transform.position = position;
