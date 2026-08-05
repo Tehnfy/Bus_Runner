@@ -44,16 +44,20 @@ public class PlayerController : MonoBehaviour
     [SerializeField] float rollInputLockDuration = 0.12f;
     [Tooltip("Only used if the controller has no clip named 'Roll'. The real length is read from the clip.")]
     [SerializeField] float rollDurationFallback = 1.7f;
-    [Tooltip("Cancel the roll clip's turn so the runner keeps facing down the lane. The clip is a " +
-             "shoulder roll and swings the body off-lane on the way through; the lane is 2.5D, so " +
-             "there is nowhere for that turn to go.")]
-    [SerializeField] bool cancelRollYaw = true;
+    [Range(0.25f, 4f)]
+    [Tooltip("Playback multiplier for the roll clip. 2 plays it twice as fast. Pushed into the " +
+             "animator's RollSpeed parameter, and every roll deadline is the clip length divided by " +
+             "it, so the state machine and this controller cannot drift apart.")]
+    [SerializeField] float rollPlaybackSpeed = 2f;
+    [Range(0f, 1f)]
+    [Tooltip("How much of the roll clip's out-of-plane lean is cancelled. 1 flattens the tumble into " +
+             "the plane the runner travels in; 0 leaves the clip untouched. The clip is a shoulder " +
+             "roll, and the lane is 2.5D, so there is nowhere for that lean to go.")]
+    [SerializeField] float rollLevelStrength = 1f;
     [Range(0f, 0.5f)]
-    [Tooltip("Share of the roll over which the yaw correction is eased back out, so handing back " +
-             "to the run does not pop.")]
-    [SerializeField] float rollYawReleaseShare = 0.2f;
-    [Tooltip("Degrees per second the correction may change. Stops a bad frame snapping the model.")]
-    [SerializeField] float rollYawMaxRate = 540f;
+    [Tooltip("Share of the roll over which the correction is eased back out, so handing back to the " +
+             "run does not snap.")]
+    [SerializeField] float rollLevelReleaseShare = 0.2f;
 
     [Header("Landing")]
     [Tooltip("A slide asked for in mid-air fires on touchdown instead of being lost to the landing " +
@@ -97,10 +101,13 @@ public class PlayerController : MonoBehaviour
     float rollDuration;
 
     const string RollClipName = "Roll";
+    // Float parameter the Roll state multiplies its own speed by. Added by Set Up Landing Roll.
+    const string RollSpeedParameter = "RollSpeed";
 
     // A mid-air slide press, held until touchdown or until it goes stale. Never set by a press
     // made while already sliding, and cleared the moment it is used.
     float airborneSlideAt = -999f;
+
 
     // Bones that define the runner's silhouette. Arms are deliberately absent.
     static readonly HumanBodyBones[] SilhouetteBoneIds =
@@ -114,11 +121,8 @@ public class PlayerController : MonoBehaviour
     Transform[] silhouetteBones;
     Transform headBone;
 
-    // Skeleton root, used to take the turn back out of the roll.
+    // Pivot for the roll levelling: rotating this carries the whole skeleton with it.
     Transform hipsBone;
-    // Correction currently applied, in degrees. Rate-limited towards its target rather than
-    // written outright, and decays back to zero once the roll releases.
-    float rollYawApplied;
     // How much mesh sits above the head bone (skull, hair). Calibrated from the standing pose,
     // because the head bone alone sits well below the top of the model.
     float headTopOffset;
@@ -186,21 +190,43 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Reads the roll length off the clip rather than trusting a number typed into the
-    /// inspector, so retiming or replacing the animation cannot leave the input lock
-    /// running long or short.
+    /// Reads the roll length off the clip rather than trusting a number typed into the inspector,
+    /// so retiming or replacing the animation cannot leave the input lock running long or short.
+    ///
+    /// Also pushes the playback speed into the animator, and divides the length by it. Those two
+    /// have to happen together: the Roll state's speed and the deadlines derived from it are the
+    /// same number, and if only one of them changed the levelling would still be correcting a pose
+    /// the state machine had already handed back to Run.
+    ///
+    /// Re-run on every roll, so dialling the speed in the inspector takes effect on the next one.
     /// </summary>
     void ResolveRollDuration()
     {
-        rollDuration = rollDurationFallback;
+        float speed = Mathf.Max(0.01f, rollPlaybackSpeed);
+
+        rollDuration = rollDurationFallback / speed;
         if (animator == null || animator.runtimeAnimatorController == null) return;
+
+        if (HasFloatParameter(RollSpeedParameter)) animator.SetFloat(RollSpeedParameter, speed);
 
         foreach (var clip in animator.runtimeAnimatorController.animationClips)
         {
             if (clip == null || clip.name != RollClipName) continue;
-            rollDuration = clip.length;
+            rollDuration = clip.length / speed;
             return;
         }
+    }
+
+    /// <summary>
+    /// Guards the SetFloat above. A controller that has not been through Set Up Landing Roll has no
+    /// RollSpeed parameter, and writing a missing one logs on every roll.
+    /// </summary>
+    bool HasFloatParameter(string name)
+    {
+        foreach (var parameter in animator.parameters)
+            if (parameter.type == AnimatorControllerParameterType.Float && parameter.name == name)
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -212,7 +238,7 @@ public class PlayerController : MonoBehaviour
     void BeginRoll()
     {
         EndSlide();
-        rollYawApplied = 0f;
+        ResolveRollDuration();   // picks up an inspector change to the playback speed
         rollEndsAt = Time.time + rollDuration;
         rollInputLockUntil = Time.time + Mathf.Clamp(rollInputLockDuration, 0f, rollDuration);
         if (animator != null) animator.SetTrigger("Roll");
@@ -228,77 +254,93 @@ public class PlayerController : MonoBehaviour
             silhouetteBones[i] = animator.GetBoneTransform(SilhouetteBoneIds[i]);
     }
 
-    /// <summary>
-    /// How far the animated body is turned about the vertical, in degrees, as a swing-twist
-    /// decomposition of the hips' rotation.
-    ///
-    /// This replaced a version that measured the heading of the hip line. That could not work:
-    /// the roll inverts the body, and once inverted the hip line's flat projection both reverses
-    /// and shrinks, so its heading is meaningless exactly across the middle of the roll where the
-    /// turn actually happens. Reading the twist straight off the quaternion has no such blind
-    /// spot, needs no reference pose, and cannot drift, because it is an absolute measure of the
-    /// current pose rather than an integral of how it got there.
-    ///
-    /// Returns false only in the genuinely degenerate case: a half turn about a horizontal axis,
-    /// where the vertical component is undefined.
-    /// </summary>
-    bool TryMeasureBodyYaw(out float twistDegrees)
+    /// <summary>Full strength through the body of the roll, eased in and out at its ends.</summary>
+    float RollLevelWeight()
     {
-        twistDegrees = 0f;
-        if (hipsBone == null) return false;
+        if (rollLevelStrength <= 0f || !IsRolling || rollDuration <= 0f) return 0f;
 
-        var q = Quaternion.Inverse(transform.rotation) * hipsBone.rotation;
-        if (q.w < 0f) q = new Quaternion(-q.x, -q.y, -q.z, -q.w);   // canonical, so the sign is stable
+        float ramp = rollDuration * Mathf.Clamp(rollLevelReleaseShare, 0f, 0.5f);
+        if (ramp <= 0f) return rollLevelStrength;
 
-        var proj = Vector3.Project(new Vector3(q.x, q.y, q.z), Vector3.up);
-        if (proj.sqrMagnitude + q.w * q.w < 1e-8f) return false;
+        float remaining = rollEndsAt - Time.time;
+        float elapsed = rollDuration - remaining;
 
-        var twist = new Quaternion(proj.x, proj.y, proj.z, q.w);
-        twist.Normalize();
-
-        twistDegrees = 2f * Mathf.Atan2(twist.y, twist.w) * Mathf.Rad2Deg;
-        if (twistDegrees > 180f) twistDegrees -= 360f;
-        else if (twistDegrees < -180f) twistDegrees += 360f;
-        return true;
-    }
-
-    /// <summary>1 through the body of the roll, eased to 0 over its final share.</summary>
-    float RollYawCorrectionWeight()
-    {
-        if (!cancelRollYaw || !IsRolling || rollDuration <= 0f) return 0f;
-        float release = rollDuration * Mathf.Clamp(rollYawReleaseShare, 0f, 0.5f);
-        if (release <= 0f) return 1f;
-        return Mathf.Clamp01((rollEndsAt - Time.time) / release);
+        // Eased at both ends, not just the exit. The clip's very first frame already carries about
+        // 23 degrees of pelvis twist, so snapping the correction on at entry pops exactly as much
+        // as dropping it at the handoff to Run.
+        return rollLevelStrength
+               * Mathf.Min(Mathf.Clamp01(elapsed / ramp), Mathf.Clamp01(remaining / ramp));
     }
 
     /// <summary>
-    /// Turns the animated body back onto the lane. Applied to the skeleton root, so the whole
-    /// pose swings with it, and pivoted on the capsule's own axis so the correction cannot shove
-    /// the model sideways out of the lane.
+    /// Flattens the roll clip's corkscrew back into the plane the runner travels in.
     ///
-    /// The applied angle is rate-limited so no single frame can snap the model, and eased back out
-    /// at the end of the roll as the run pose takes over.
+    /// "Quick Roll To Run" is a shoulder roll. Its pitch sweeps a clean 360 degrees in the travel
+    /// plane — the somersault itself is correct — but the body also leans up to 46 degrees out of
+    /// that plane, twice and in opposite directions, and comes up twisted. That corkscrew is what
+    /// reads as rolling sideways. It lives entirely in the pose: applyRootMotion is off, so no root
+    /// curve reaches the character, and nothing done to the capsule's own orientation can touch it.
+    ///
+    /// The fix rotates the spine onto its own projection into the travel plane, pivoting on the
+    /// hips. Both of those choices were arrived at by measurement, and both matter:
+    ///
+    ///   Axis. Rotating about the travel axis cannot work. Mid-roll the spine points forward, and a
+    ///   rotation about forward then spins the body along its own length without moving the spine at
+    ///   all — measured, it drove the lean from 46 degrees up to 73. The rotation has to be the one
+    ///   that maps the spine onto its target, which is what FromToRotation gives.
+    ///
+    ///   Pivot. The hips, not the root. The root sits at the feet, so pivoting there swings the
+    ///   whole body off the lane and pushes feet through the floor. The hips are the mass centre,
+    ///   so the correction untwists rather than translates.
+    ///
+    /// It takes two stages, because aligning the spine only fixes where the spine points and leaves
+    /// rotation about the spine completely free — measurement confirmed the twist was bit-identical
+    /// before and after stage one. That leftover freedom is the spin: the pelvis swings about 140
+    /// degrees about the spine and back within a sixth of the clip, with dot(hips.right, lateral)
+    /// running 0.92 to -0.46 and back to 1.00. Stage two removes it.
+    ///
+    /// The twist is read off the pelvis rather than the shoulder line. The pelvis is rigid, so a
+    /// mid-roll tuck cannot drag its axis around, and both references agreed on the shape while
+    /// disagreeing by about 25 degrees at the ends — that gap is the natural shoulder counter-
+    /// rotation of a run, which should be preserved, not flattened.
+    ///
+    /// Measured at full strength, both stages, against the raw clip: lean 46 degrees to 0, twist
+    /// 167 degrees to 0, worst foot clearance 0.07 to 0.06, and lateral offset 0.79 to 0.72. The
+    /// body ends up more centred than the untouched clip, which is why this is on by default.
     /// </summary>
-    void ApplyRollYawCorrection()
+    void LevelRollPose()
     {
-        if (hipsBone == null) return;
+        float weight = RollLevelWeight();
+        if (weight <= 0f || hipsBone == null || headBone == null) return;
 
-        float weight = RollYawCorrectionWeight();
-        float target = 0f;
-        if (weight > 0f)
-        {
-            // Undo the whole measured twist, so the tumble stays in the lane plane. Peaks at
-            // about 50 degrees mid-roll and settles near 18; both are removed.
-            target = TryMeasureBodyYaw(out float twist) ? -twist * weight
-                                                        : rollYawApplied;   // degenerate: coast
-        }
+        var lateral = transform.right;
 
-        rollYawApplied = Mathf.MoveTowardsAngle(rollYawApplied, target, rollYawMaxRate * Time.deltaTime);
-        if (Mathf.Abs(rollYawApplied) < 0.01f) return;
+        // Stage one: swing the spine into the plane the runner travels in.
+        var spine = headBone.position - hipsBone.position;
+        if (spine.sqrMagnitude < 1e-6f) return;
+        spine.Normalize();
 
-        var fix = Quaternion.AngleAxis(rollYawApplied, Vector3.up);
-        hipsBone.rotation = fix * hipsBone.rotation;
-        hipsBone.position = transform.position + fix * (hipsBone.position - transform.position);
+        var flat = spine - lateral * Vector3.Dot(spine, lateral);
+        // A spine lying along the lateral axis has no in-plane direction to aim at. Leave the pose
+        // alone rather than pick one arbitrarily and snap the model.
+        if (flat.sqrMagnitude < 1e-6f) return;
+        flat.Normalize();
+
+        // Rotating the hips carries every descendant with it about the hip joint, which is the
+        // pivot we want; the hips' own position is left where the clip put it.
+        hipsBone.rotation = Quaternion.Slerp(
+            Quaternion.identity, Quaternion.FromToRotation(spine, flat), weight) * hipsBone.rotation;
+
+        // Stage two: take the corkscrew out of the one axis stage one left free. Re-read the spine
+        // first — stage one just moved it.
+        var axis = (headBone.position - hipsBone.position).normalized;
+        var pelvis = hipsBone.right;
+        var pelvisPerp = pelvis - axis * Vector3.Dot(pelvis, axis);
+        var lateralPerp = lateral - axis * Vector3.Dot(lateral, axis);
+        if (pelvisPerp.sqrMagnitude < 1e-6f || lateralPerp.sqrMagnitude < 1e-6f) return;
+
+        float twist = Vector3.SignedAngle(pelvisPerp.normalized, lateralPerp.normalized, axis);
+        hipsBone.rotation = Quaternion.AngleAxis(twist * weight, axis) * hipsBone.rotation;
     }
 
     /// <summary>
@@ -347,7 +389,7 @@ public class PlayerController : MonoBehaviour
 
         if (!headOffsetCalibrated && !IsSliding && !IsRolling) CalibrateHeadOffset();
 
-        ApplyRollYawCorrection();
+        LevelRollPose();
 
         if (!slideCapsuleFollowsPose || !IsSliding) return;
 
@@ -384,10 +426,7 @@ public class PlayerController : MonoBehaviour
         var motion = new Vector3(runSpeed, verticalVelocity, 0f) * Time.deltaTime;
         cc.Move(motion);
 
-        // 2.5D: nothing should ever shift us off the lane plane
-        var p = transform.position;
-        if (!Mathf.Approximately(p.z, lockedZ))
-            transform.position = new Vector3(p.x, p.y, lockedZ);
+        PinLane();
 
         // The Jump state leaves on this rather than on clip time. Air time depends on what the
         // runner lands on — hopping up onto a rooftop cuts it to a fraction of the clip — so a
@@ -417,6 +456,14 @@ public class PlayerController : MonoBehaviour
         float airTime = Time.time - leftGroundAt;
         leftGroundAt = -1f;
         if (airTime >= rollAirTime) BeginRoll();
+    }
+
+    /// <summary>2.5D: nothing may shift the runner off the lane plane.</summary>
+    void PinLane()
+    {
+        var p = transform.position;
+        if (!Mathf.Approximately(p.z, lockedZ))
+            transform.position = new Vector3(p.x, p.y, lockedZ);
     }
 
     public void Jump()
@@ -509,6 +556,10 @@ public class PlayerController : MonoBehaviour
     {
         EndSlide();
         airborneSlideAt = -999f;   // a press from before the death must not fire on respawn
+        // Dying in mid-air used to leave leftGroundAt set, so TrackAirborne measured the fall as
+        // running from before the death and fired a landing roll on the respawn's first grounded
+        // frame. The respawn is a fresh start, not the end of a fall.
+        leftGroundAt = -1f;
         verticalVelocity = 0f;
         cc.enabled = false;
         transform.position = position;

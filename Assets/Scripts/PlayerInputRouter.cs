@@ -1,6 +1,5 @@
 using System;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 /// <summary>
 /// Single funnel for every way the player can jump or slide: keyboard, on-screen
@@ -44,11 +43,10 @@ public class PlayerInputRouter : MonoBehaviour
 
     void Update()
     {
-        var keyboard = Keyboard.current;
-        if (keyboard == null) return;
-
-        if (keyboard.spaceKey.wasPressedThisFrame) RaiseJump();
-        if (keyboard.leftCtrlKey.wasPressedThisFrame || keyboard.rightCtrlKey.wasPressedThisFrame) RaiseSlide();
+        // Which keys these are is InputBindings' business, not this component's — the Controls
+        // screen rewrites them and saves to PlayerPrefs, so there is nothing to pass in here.
+        if (InputBindings.WasPressedThisFrame(GameAction.Jump)) RaiseJump();
+        if (InputBindings.WasPressedThisFrame(GameAction.Slide)) RaiseSlide();
     }
 
     // Public so the on-screen Buttons can call them from onClick.

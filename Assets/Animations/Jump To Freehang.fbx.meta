@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: c6ce1f37a76da414e8ef4299e2c603da
+guid: 4d76643288b7dea4c81f4835dd8c53ee
 ModelImporter:
   serializedVersion: 24300
   internalIDToNameTable: []
@@ -32,11 +32,11 @@ ModelImporter:
     extraUserProperties: []
     clipAnimations:
     - serializedVersion: 16
-      name: Roll
+      name: Swing
       takeName: mixamo.com
       internalID: -203655887218126122
-      firstFrame: 5
-      lastFrame: 107
+      firstFrame: 0
+      lastFrame: 129
       wrapMode: 0
       orientationOffsetY: 0
       level: 0

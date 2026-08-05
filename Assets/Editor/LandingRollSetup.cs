@@ -12,24 +12,31 @@ using UnityEngine;
 /// "Roll" so PlayerController can measure its length at runtime, and adds the state
 /// and transitions to PlayerAnimator.
 ///
-/// The clip is trimmed to start at the landing. Frames 0-4 are the descent, which put the
-/// feet 0.515 above the capsule base against ~0.10 for a grounded run; BeginRoll fires on
-/// touchdown, so untrimmed those frames render as a hover.
+/// Whether the clip needs trimming depends on the take. "Falling To Roll" opened with a descent
+/// whose first frames put the feet 0.515 above the capsule base against ~0.10 for a grounded run,
+/// and since BeginRoll fires on touchdown those frames rendered as a hover, so they were cut.
+/// "Quick Roll To Run" starts on the ground, so it is used whole.
 ///
 /// Safe to run more than once — it reuses whatever it already made.
 /// </summary>
 static class LandingRollSetup
 {
-    const string RollFbx = "Assets/Animations/Falling To Roll.fbx";
+    const string RollFbx = "Assets/Animations/Quick Roll To Run.fbx";
 
-    // First frame with the feet actually down, measured per frame off the imported pose.
-    const float LandingFrame = 5f;
-    const float LastFrame = 107f;
+    // Frames kept from the take. Negative first frame means "use the whole clip": unlike
+    // "Falling To Roll", which opened with a descent that had to be cut, this take is a roll that
+    // runs out of it, so nothing is trimmed until measurement says otherwise.
+    const float LandingFrame = -1f;
+    const float LastFrame = -1f;
     const string CharacterFbx = "Assets/Models/Ch36_nonPBR.fbx";
     const string ControllerPath = "Assets/Animations/PlayerAnimator.controller";
     const string ClipName = "Roll";
     const string StateName = "Roll";
     const string TriggerName = "Roll";
+
+    // The state's speed is multiplied by this parameter rather than being typed into the state, so
+    // PlayerController owns the number — it needs the same value to derive the roll's deadlines from.
+    const string SpeedParameterName = "RollSpeed";
 
     // The roll can be entered mid-jump or straight off a run, so it comes in from Any
     // State. Coming out, it mirrors the existing Jump/Slide cross-links: back to Run on
@@ -92,10 +99,11 @@ static class LandingRollSetup
         // PlayerController finds the clip by name to read its length, so the Mixamo take
         // name will not do — and the descent has to come off the front.
         var existing = importer.clipAnimations;
+        bool trimWanted = LandingFrame >= 0f && LastFrame >= 0f;
         bool needsFixing = existing.Length == 0
                            || existing[0].name != ClipName
-                           || !Mathf.Approximately(existing[0].firstFrame, LandingFrame)
-                           || !Mathf.Approximately(existing[0].lastFrame, LastFrame);
+                           || (trimWanted && (!Mathf.Approximately(existing[0].firstFrame, LandingFrame)
+                                              || !Mathf.Approximately(existing[0].lastFrame, LastFrame)));
 
         if (needsFixing)
         {
@@ -107,8 +115,11 @@ static class LandingRollSetup
             }
             clips[0].name = ClipName;
             clips[0].loopTime = false;
-            clips[0].firstFrame = LandingFrame;
-            clips[0].lastFrame = LastFrame;
+            if (trimWanted)
+            {
+                clips[0].firstFrame = LandingFrame;
+                clips[0].lastFrame = LastFrame;
+            }
             importer.clipAnimations = new[] { clips[0] };
             importer.SaveAndReimport();
         }
@@ -126,6 +137,16 @@ static class LandingRollSetup
         if (!controller.parameters.Any(p => p.name == TriggerName))
             controller.AddParameter(TriggerName, AnimatorControllerParameterType.Trigger);
 
+        // Defaults to 1, not 0: a controller whose parameter never gets written should play the roll
+        // at normal speed, not freeze on its first frame.
+        if (!controller.parameters.Any(p => p.name == SpeedParameterName))
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = SpeedParameterName,
+                type = AnimatorControllerParameterType.Float,
+                defaultFloat = 1f,
+            });
+
         var machine = controller.layers[0].stateMachine;
         var run = FindState(machine, "Run");
         var jump = FindState(machine, "Jump");
@@ -135,6 +156,8 @@ static class LandingRollSetup
         if (roll == null) roll = machine.AddState(StateName, new Vector3(560f, 210f, 0f));
         roll.motion = clip;
         roll.speed = 1f;
+        roll.speedParameterActive = true;
+        roll.speedParameter = SpeedParameterName;
 
         // In: from anywhere, on the trigger. No exit time — the landing decides the timing.
         if (!machine.anyStateTransitions.Any(t => t.destinationState == roll))
