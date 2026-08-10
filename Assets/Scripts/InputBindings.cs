@@ -119,6 +119,26 @@ public static class InputBindings
     }
 
     /// <summary>
+    /// True while either slot for this action is down. The press-this-frame version answers "did
+    /// they ask for it"; this answers "are they still asking", which is what a held slide needs.
+    /// </summary>
+    public static bool IsHeld(GameAction action)
+    {
+        var keyboard = Keyboard.current;
+        if (keyboard == null) return false;
+
+        EnsureLoaded();
+        for (int slot = 0; slot < SlotCount; slot++)
+        {
+            var key = bindings[(int)action, slot];
+            if (key == Key.None) continue;
+            var control = keyboard[key];
+            if (control != null && control.isPressed) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Escape is excluded because the rebind prompt uses it to cancel — binding it would leave
     /// no way out of that window. None and any value not in the enum are rejected as junk,
     /// which is also what makes indexing Keyboard by a stored value safe.

@@ -27,6 +27,20 @@ public class PlayerController : MonoBehaviour
     [Range(0f, 1f)]
     [Tooltip("How far into the slide a jump may cancel out of it. 0.8 = the last fifth.")]
     [SerializeField] float slideJumpCancelAt = 0.8f;
+    [Range(1f, 6f)]
+    [Tooltip("Longest a held slide may run, as a multiple of slideDuration. 1 turns holding off. " +
+             "Only keys and the on-screen button can hold — a swipe is over the moment it lands.")]
+    [SerializeField] float slideHoldMaxMultiplier = 3f;
+    [Range(1f, 6f)]
+    [Tooltip("How long a slide may be stretched purely because standing up would put the capsule " +
+             "inside something, as a multiple of slideDuration. Independent of holding: the runner " +
+             "keeps ducking under a long overhang whether or not they are still pressing.")]
+    [SerializeField] float slideBlockedMaxMultiplier = 3f;
+    [Range(0.1f, 0.95f)]
+    [Tooltip("How far through the slide clip the pose freezes while the slide is being stretched. " +
+             "Must land after the tuck and before the stand-up, so a long slide holds a low pose and " +
+             "still has its recovery left to play when it finally ends.")]
+    [SerializeField] float slideHoldPoint = 0.55f;
     [Tooltip("While sliding, size the capsule from the animated pose each frame instead of holding " +
              "slideHeightFraction. Arms are ignored — a raised hand should not make the runner 'taller'.")]
     [SerializeField] bool slideCapsuleFollowsPose = true;
@@ -65,6 +79,9 @@ public class PlayerController : MonoBehaviour
              "already sliding is always dropped, which is what stops a double tap producing a " +
              "second slide when the first one ends.")]
     [SerializeField] float slideLandingGrace = 0.2f;
+    [Tooltip("Same idea for jump. Without it a jump pressed on the touchdown frame is dropped " +
+             "outright, which is the main way a press appears to do nothing at all.")]
+    [SerializeField] float jumpLandingGrace = 0.15f;
 
     [Header("Crashing")]
     [Tooltip("A surface counts as a wall when its normal points back down the lane at least this much. " +
@@ -78,7 +95,16 @@ public class PlayerController : MonoBehaviour
 
     float verticalVelocity;
     float lastGroundedTime;
+    PlayerInputRouter inputRouter;
     float slideEndsAt = -1f;
+    // When the current slide began. Elapsed time is measured from here rather than from the
+    // deadline, because the deadline moves while the slide is being extended.
+    float slideStartedAt;
+    // How much of the slide animation has actually played. Stops advancing while the pose is frozen,
+    // which is what lets the recovery still get its full run after a long hold.
+    float slideClipTime;
+    // Latched so a runner stuck under geometry past every allowance complains once, not every frame.
+    bool warnedSlideStuck;
     float lockedZ;
 
     float standHeight;
@@ -103,10 +129,16 @@ public class PlayerController : MonoBehaviour
     const string RollClipName = "Roll";
     // Float parameter the Roll state multiplies its own speed by. Added by Set Up Landing Roll.
     const string RollSpeedParameter = "RollSpeed";
+    // Float the Slide state multiplies its own speed by. 0 holds the pose for a stretched slide.
+    const string SlideSpeedParameter = "SlideSpeed";
+    // Bool that keeps the Slide state alive; its exit used to be an unconditional clip-time one.
+    const string SlidingParameter = "Sliding";
 
     // A mid-air slide press, held until touchdown or until it goes stale. Never set by a press
     // made while already sliding, and cleared the moment it is used.
     float airborneSlideAt = -999f;
+    // Same, for jump.
+    float airborneJumpAt = -999f;
 
 
     // Bones that define the runner's silhouette. Arms are deliberately absent.
@@ -137,16 +169,23 @@ public class PlayerController : MonoBehaviour
     /// <summary>Jump and slide are swallowed while this holds — the outro, or a landing roll's brief lock.</summary>
     bool ActionsBlocked => actionsLocked || Time.time < rollInputLockUntil;
 
-    /// <summary>0 at the start of a slide, 1 at its end. Reads 1 when not sliding.</summary>
+    /// <summary>
+    /// 0 at the start of a slide, 1 once a normal slide's worth of time has passed. Reads 1 when not
+    /// sliding, and stays at 1 through an extension — measured from the start rather than back from
+    /// the deadline, because the deadline moves while a slide is held or blocked.
+    /// </summary>
     public float SlideProgress =>
         IsSliding && slideDuration > 0f
-            ? Mathf.Clamp01(1f - (slideEndsAt - Time.time) / slideDuration)
+            ? Mathf.Clamp01((Time.time - slideStartedAt) / slideDuration)
             : 1f;
 
     void Awake()
     {
         cc = GetComponent<CharacterController>();
         animator = GetComponent<Animator>();
+        // Asked whether the slide button is still down. The router is the only thing that knows,
+        // because it is the only thing that sees both the keyboard and the on-screen button.
+        inputRouter = GetComponent<PlayerInputRouter>();
 
         standHeight = cc.height;
         standCenter = cc.center;
@@ -171,6 +210,7 @@ public class PlayerController : MonoBehaviour
             verticalVelocity = 0f;
             EndSlide();
             airborneSlideAt = -999f;
+            airborneJumpAt = -999f;
         }
         if (animator != null) animator.speed = enabled ? 1f : 0f;
     }
@@ -186,6 +226,7 @@ public class PlayerController : MonoBehaviour
         {
             EndSlide();
             airborneSlideAt = -999f;
+            airborneJumpAt = -999f;
         }
     }
 
@@ -406,12 +447,20 @@ public class PlayerController : MonoBehaviour
 
         TrackAirborne();
 
-        // Expire the slide
-        if (slideEndsAt > 0f && Time.time >= slideEndsAt) EndSlide();
+        MaintainSlide();
 
-        // Fire a slide asked for in the air the moment the feet are down. Consumed before the
-        // attempt, so a failure cannot leave it to retry on a later frame.
-        if (cc.isGrounded && !ActionsBlocked && Time.time - airborneSlideAt <= slideLandingGrace)
+        // Fire an action asked for in the air the moment the feet are down. Each is consumed before
+        // its attempt, so a failure cannot leave it to retry on a later frame.
+        //
+        // Jump wins when both are held, and the slide is dropped rather than queued behind it —
+        // firing both would put the runner into a slide the instant they left the ground.
+        if (cc.isGrounded && !ActionsBlocked && Time.time - airborneJumpAt <= jumpLandingGrace)
+        {
+            airborneJumpAt = -999f;
+            airborneSlideAt = -999f;
+            TryJump();
+        }
+        else if (cc.isGrounded && !ActionsBlocked && Time.time - airborneSlideAt <= slideLandingGrace)
         {
             airborneSlideAt = -999f;
             TrySlide();
@@ -468,10 +517,18 @@ public class PlayerController : MonoBehaviour
 
     public void Jump()
     {
-        // Not buffered: a jump pressed too early is dropped, so it can never
-        // surprise the player with a hop a moment after they land.
         if (!controlEnabled || ActionsBlocked) return;
-        TryJump();
+        if (TryJump()) return;
+
+        // Rejected. Hold exactly one kind, the same kind the slide holds: a press made in the air,
+        // which is a player asking to jump the moment they land. That covers the touchdown frame,
+        // where cc.isGrounded can still read false because the input router and this script both
+        // run in Update in no guaranteed order — so whether the press lands depends on which ran
+        // first, and that is what makes it feel intermittent rather than broken.
+        //
+        // A press rejected mid-slide is dropped outright, so it cannot resurface as an unasked-for
+        // hop when the slide expires.
+        if (!IsSliding) airborneJumpAt = Time.time;
     }
 
     public void Slide()
@@ -500,13 +557,146 @@ public class PlayerController : MonoBehaviour
         if (IsSliding)
         {
             if (SlideProgress < slideJumpCancelAt) return false;
+            // Same reason MaintainSlide refuses to end a blocked slide: standing up to jump while
+            // something is directly overhead drives the capsule into it.
+            if (BlockedFromStanding()) return false;
             EndSlide();
         }
 
         verticalVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
         lastGroundedTime = -999f;
+        airborneJumpAt = -999f;   // spent, so leaving the ground cannot re-fire it on the way down
         if (animator != null) animator.SetTrigger("Jump");
         return true;
+    }
+
+    /// <summary>
+    /// Ends the slide, or keeps it going. Two independent reasons to keep going:
+    ///
+    ///   Held. The player is still asking for it, up to slideHoldMaxMultiplier. This is the one
+    ///   players drive, and it is what makes long ducking stretches designable.
+    ///
+    ///   Blocked. Standing up would put the capsule inside something, up to
+    ///   slideBlockedMaxMultiplier. Nothing to do with input — the runner keeps ducking under a long
+    ///   overhang whether or not they are still pressing, because the alternative is expanding into
+    ///   solid geometry.
+    ///
+    /// Past every allowance and still blocked, the slide continues anyway and logs once. Forcing the
+    /// stand there would jam the capsule inside the obstacle, and a tunnel longer than the configured
+    /// allowance is a level-building mistake worth seeing in the console rather than silently
+    /// absorbing.
+    /// </summary>
+    void MaintainSlide()
+    {
+        if (slideEndsAt < 0f) return;   // not sliding
+
+        float elapsed = Time.time - slideStartedAt;
+        bool blocked = BlockedFromStanding();
+        bool held = inputRouter != null && inputRouter.SlideHeld;
+
+        float allowance = slideDuration;
+        if (held)
+            allowance = Mathf.Max(allowance, slideDuration * Mathf.Max(1f, slideHoldMaxMultiplier));
+        if (blocked)
+            allowance = Mathf.Max(allowance, slideDuration * Mathf.Max(1f, slideBlockedMaxMultiplier));
+
+        // Blocked overrides the ceiling entirely — expanding into geometry is never the answer — but
+        // it says so once, because a tunnel that long is a level-building mistake.
+        bool overAllowance = elapsed >= allowance;
+        bool stretch = (held || blocked) && (!overAllowance || blocked);
+
+        if (blocked && overAllowance && !warnedSlideStuck)
+        {
+            warnedSlideStuck = true;
+            Debug.LogWarning($"[PlayerController] Still cannot stand {elapsed:F2}s into a slide, past the " +
+                             $"{slideBlockedMaxMultiplier:F0}x allowance. Staying down rather than expanding " +
+                             $"into geometry — the overhang near x={transform.position.x:F1} is longer than " +
+                             $"the allowance permits.");
+        }
+
+        // Clip time only advances when the pose is not frozen, so it is the honest measure of how
+        // much of the animation has actually played.
+        bool freeze = stretch && slideClipTime >= slideDuration * Mathf.Clamp01(slideHoldPoint);
+        if (!freeze) slideClipTime += Time.deltaTime;
+        SetSlideSpeed(freeze ? 0f : 1f);
+
+        if (stretch)
+        {
+            // Hold the deadline a frame ahead, so IsSliding stays true and the decision is re-made
+            // next frame against fresh geometry and fresh input.
+            slideEndsAt = Time.time + Mathf.Max(Time.deltaTime, 0.001f);
+            return;
+        }
+
+        // Not stretching any more. The capsule stays low until the clip has played its recovery,
+        // otherwise the runner would stand up while the animation was still on the floor.
+        if (slideClipTime < slideDuration)
+        {
+            slideEndsAt = Time.time + Mathf.Max(Time.deltaTime, 0.001f);
+            return;
+        }
+
+        EndSlide();
+    }
+
+    /// <summary>
+    /// Scales the Slide state's playback. 0 freezes the pose, which is how a stretched slide holds
+    /// its shape instead of running the recovery early: the clip is 0.42s long and its exit used to
+    /// be unconditional, so without this a held slide showed the runner up and running while the
+    /// capsule was still crouched.
+    /// </summary>
+    void SetSlideSpeed(float speed)
+    {
+        if (animator == null || !HasFloatParameter(SlideSpeedParameter)) return;
+        animator.SetFloat(SlideSpeedParameter, speed);
+    }
+
+    /// <summary>
+    /// Holds the Slide state open. Guarded like the float parameters: a controller that predates
+    /// Set Up Slide Hold has no such bool, and writing a missing one logs on every slide.
+    /// </summary>
+    void SetSlidingFlag(bool sliding)
+    {
+        if (animator == null) return;
+        foreach (var parameter in animator.parameters)
+            if (parameter.type == AnimatorControllerParameterType.Bool && parameter.name == SlidingParameter)
+            {
+                animator.SetBool(SlidingParameter, sliding);
+                return;
+            }
+    }
+
+    /// <summary>
+    /// Whether expanding back to the standing capsule would intersect something.
+    ///
+    /// The controller's own collider is switched off for the test — the probe capsule is the standing
+    /// one, which overlaps the crouched capsule by definition, so leaving it on would report blocked
+    /// every time. Teleport already uses the same disable-and-restore trick. The base is lifted clear
+    /// of the floor and the radius shaved, so the ground the runner is standing on is not mistaken
+    /// for a ceiling and a shoulder brushing a wall is not either.
+    /// </summary>
+    bool BlockedFromStanding()
+    {
+        if (standHeight - cc.height <= 0.001f) return false;
+
+        bool wasEnabled = cc.enabled;
+        cc.enabled = false;
+
+        // This project runs with Physics.autoSyncTransforms off, so a query issued straight after a
+        // transform or collider change can read stale physics state — measured: the same volume
+        // reported clear from CheckCapsule while OverlapCapsule found the ceiling in it. Syncing
+        // first is what makes the answer trustworthy on the frame it is asked.
+        Physics.SyncTransforms();
+
+        float radius = Mathf.Max(0.01f, cc.radius * 0.9f);
+        float bottom = radius + 0.05f;
+        float top = Mathf.Max(bottom, standHeight - radius);
+        var p0 = transform.position + Vector3.up * bottom;
+        var p1 = transform.position + Vector3.up * top;
+        bool blocked = Physics.CheckCapsule(p0, p1, radius, ~0, QueryTriggerInteraction.Ignore);
+
+        cc.enabled = wasEnabled;
+        return blocked;
     }
 
     bool TrySlide()
@@ -517,6 +707,11 @@ public class PlayerController : MonoBehaviour
         // Returning false while already sliding is what makes a second tap a no-op rather
         // than a queued second slide — the trigger is never set, so nothing can replay it.
         if (!cc.isGrounded || IsSliding) return false;
+        slideStartedAt = Time.time;
+        slideClipTime = 0f;
+        warnedSlideStuck = false;
+        SetSlideSpeed(1f);
+        SetSlidingFlag(true);
         slideEndsAt = Time.time + slideDuration;
         cc.height = standHeight * slideHeightFraction;
         cc.center = new Vector3(standCenter.x, cc.height * 0.5f, standCenter.z);
@@ -527,6 +722,9 @@ public class PlayerController : MonoBehaviour
     void EndSlide()
     {
         slideEndsAt = -1f;
+        slideClipTime = 0f;
+        SetSlideSpeed(1f);   // never leave the state frozen for the next slide to inherit
+        SetSlidingFlag(false);
         cc.height = standHeight;
         cc.center = standCenter;
     }
@@ -540,6 +738,17 @@ public class PlayerController : MonoBehaviour
     {
         if (!controlEnabled) return;
 
+        // A canopy launches the runner off its top face. Tested first, but only the booster itself
+        // decides whether this contact counts as the top — a hit on its front edge falls straight
+        // through to the wall rules below and kills, exactly like any other obstacle.
+        // GetComponentInParent, so the collider is free to be a child of the prefab root.
+        var canopy = hit.collider.GetComponentInParent<CanopyBooster>();
+        if (canopy != null && canopy.TryConsumeBounce(hit.normal))
+        {
+            Bounce(canopy.BounceHeight);
+            return;
+        }
+
         // Roofs, floors and ceilings all fail this test — only walls pass.
         if (hit.normal.x > wallNormalThreshold) return;
 
@@ -551,11 +760,36 @@ public class PlayerController : MonoBehaviour
         if (RunManager.Instance != null) RunManager.Instance.Kill();
     }
 
+    /// <summary>
+    /// Launches the runner off a canopy. Not a jump: it asks for no ground under the feet and does
+    /// not consult ActionsBlocked, because the canopy is doing the work, not the player. Height is
+    /// an apex above the point of contact, converted through the same gravity the jump uses so the
+    /// two stay comparable.
+    /// </summary>
+    public void Bounce(float height)
+    {
+        EndSlide();
+        verticalVelocity = Mathf.Sqrt(2f * Mathf.Max(0f, height) * -gravity);
+
+        // No coyote hop off the launch, and no buffered press cashing itself in at the top of it.
+        lastGroundedTime = -999f;
+        airborneJumpAt = -999f;
+        airborneSlideAt = -999f;
+
+        // The canopy absorbs the fall, so the air-time clock restarts here. Without this, a long
+        // drop onto a canopy would still be carrying that fall when the runner next touches down
+        // and would fire a landing roll the canopy has already cancelled.
+        leftGroundAt = Time.time;
+
+        if (animator != null) animator.SetTrigger("Jump");
+    }
+
     /// <summary>Hard reposition used on respawn — CharacterController ignores transform writes while enabled.</summary>
     public void Teleport(Vector3 position)
     {
         EndSlide();
         airborneSlideAt = -999f;   // a press from before the death must not fire on respawn
+        airborneJumpAt = -999f;
         // Dying in mid-air used to leave leftGroundAt set, so TrackAirborne measured the fall as
         // running from before the death and fired a landing roll on the respawn's first grounded
         // frame. The respawn is a fresh start, not the end of a fall.
