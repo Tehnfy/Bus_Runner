@@ -77,6 +77,10 @@ public class RunManager : MonoBehaviour
         if (reached.Contains(checkpoint)) return;
         reached.Add(checkpoint);
 
+        // Light it. Every checkpoint the player has passed stays lit, including ones that did not move
+        // the spawn forward, because what the lamp reports is "you have been here".
+        checkpoint.MarkReached();
+
         // Only move the spawn forward, never back — order of triggers is not guaranteed.
         if (lastCheckpoint == null || checkpoint.transform.position.x > lastCheckpoint.transform.position.x)
         {

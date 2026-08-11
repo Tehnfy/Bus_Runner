@@ -6957,6 +6957,20 @@ MonoBehaviour:
   slideRecoveryTime: 0.2
   slideCapsuleFollowsPose: 1
   slidePoseClearance: 0.06
+  slidePitchFollowsGround: 1
+  slidePitchMaxAngle: 35
+  slidePitchSmoothTime: 0.07
+  slidePitchRecoverTime: 0.25
+  slidePitchProbeDepth: 0.6
+  slideHugsGround: 1
+  slideGroundClearance: 0
+  slideMeshBelowBone: 0.035
+  slideHugMaxDrop: 0.12
+  slideHugSmoothTime: 0.05
+  slideGroundHand: 1
+  slideHandPalmOffset: 0.04
+  slideHandReachLimit: 0.99
+  slideHandSmoothTime: 0.09
   rollAirTime: 0.9
   rollInputLockDuration: 0.12
   rollDurationFallback: 1.7
