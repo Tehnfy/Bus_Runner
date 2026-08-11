@@ -30,7 +30,7 @@ public class PlayerController : MonoBehaviour
     [Range(1f, 6f)]
     [Tooltip("Longest a held slide may run, as a multiple of slideDuration. 1 turns holding off. " +
              "Only keys and the on-screen button can hold — a swipe is over the moment it lands.")]
-    [SerializeField] float slideHoldMaxMultiplier = 3f;
+    [SerializeField] float slideHoldMaxMultiplier = 2f;
     [Range(1f, 6f)]
     [Tooltip("How long a slide may be stretched purely because standing up would put the capsule " +
              "inside something, as a multiple of slideDuration. Independent of holding: the runner " +
@@ -38,9 +38,19 @@ public class PlayerController : MonoBehaviour
     [SerializeField] float slideBlockedMaxMultiplier = 3f;
     [Range(0.1f, 0.95f)]
     [Tooltip("How far through the slide clip the pose freezes while the slide is being stretched. " +
-             "Must land after the tuck and before the stand-up, so a long slide holds a low pose and " +
-             "still has its recovery left to play when it finally ends.")]
-    [SerializeField] float slideHoldPoint = 0.55f;
+             "Whatever is left plays out after the stretch ends, and the capsule stays low for it — " +
+             "so this is what decides how long the runner keeps sliding after the way up is clear. " +
+             "Set late on purpose: the clip barely rises (pose 0.515 to 0.633 across the whole take, " +
+             "never above 0.39 of standing height), so freezing near the end still holds a low pose " +
+             "and leaves almost no tail to sit through.")]
+    [SerializeField] float slideHoldPoint = 0.85f;
+    [Tooltip("After a slide that ran longer than slideDuration, the runner must be back on their feet " +
+             "for this long before another slide will start. Without it, spamming the button chains " +
+             "one extended slide straight into the next and the runner never stands up at all — the " +
+             "extension is driven by the button being down at any point during the slide, so a rapid " +
+             "tap stretches it just as a hold does. Only long slides pay this; a single quick tap " +
+             "runs its normal length and is followed by nothing.")]
+    [SerializeField] float slideRecoveryTime = 0.2f;
     [Tooltip("While sliding, size the capsule from the animated pose each frame instead of holding " +
              "slideHeightFraction. Arms are ignored — a raised hand should not make the runner 'taller'.")]
     [SerializeField] bool slideCapsuleFollowsPose = true;
@@ -92,6 +102,8 @@ public class PlayerController : MonoBehaviour
 
     CharacterController cc;
     Animator animator;
+    // Optional. A player without a built ragdoll simply freezes on death, as it always did.
+    PlayerRagdoll ragdoll;
 
     float verticalVelocity;
     float lastGroundedTime;
@@ -105,6 +117,13 @@ public class PlayerController : MonoBehaviour
     float slideClipTime;
     // Latched so a runner stuck under geometry past every allowance complains once, not every frame.
     bool warnedSlideStuck;
+    // Set when a long slide ends. Until this passes, the runner has to stay on their feet.
+    float slideRecoveryUntil = -1f;
+    // Whether the slide in progress was actually made to outlast its clip, by a hold or by geometry.
+    // Latched during the slide rather than worked out from its total length at the end: an ordinary
+    // slide measures a frame or two over slideDuration purely from frame quantisation, and comparing
+    // totals charged a plain 0.70s tap as if it had been a long one.
+    bool slideWasProlonged;
     float lockedZ;
 
     float standHeight;
@@ -163,8 +182,21 @@ public class PlayerController : MonoBehaviour
     public bool IsSliding => Time.time < slideEndsAt;
     public bool IsGrounded => cc.isGrounded || Time.time - lastGroundedTime < coyoteTime;
 
+    /// <summary>
+    /// World velocity the runner is carrying. Read by the ragdoll on death so the collapse continues
+    /// the motion instead of dropping from a standstill — the same vector Update feeds to cc.Move.
+    /// </summary>
+    public Vector3 CurrentVelocity => new Vector3(runSpeed, verticalVelocity, 0f);
+
     /// <summary>True for the length of the roll clip after a long fall.</summary>
     public bool IsRolling => Time.time < rollEndsAt;
+
+    /// <summary>
+    /// True while the runner is serving out the mandatory stand after a long slide. Nothing else
+    /// reads it — it exists so the state is inspectable from a test or a debug readout, because
+    /// "the slide did not start" is otherwise indistinguishable from a dropped input.
+    /// </summary>
+    public bool IsSlideRecovering => Time.time < slideRecoveryUntil;
 
     /// <summary>Jump and slide are swallowed while this holds — the outro, or a landing roll's brief lock.</summary>
     bool ActionsBlocked => actionsLocked || Time.time < rollInputLockUntil;
@@ -186,6 +218,7 @@ public class PlayerController : MonoBehaviour
         // Asked whether the slide button is still down. The router is the only thing that knows,
         // because it is the only thing that sees both the keyboard and the on-screen button.
         inputRouter = GetComponent<PlayerInputRouter>();
+        ragdoll = GetComponent<PlayerRagdoll>();
 
         standHeight = cc.height;
         standCenter = cc.center;
@@ -209,6 +242,9 @@ public class PlayerController : MonoBehaviour
         {
             verticalVelocity = 0f;
             EndSlide();
+            // Cleared after EndSlide, which may have just charged one. Losing control is not a
+            // penalty the player should still be paying when they get it back.
+            slideRecoveryUntil = -1f;
             airborneSlideAt = -999f;
             airborneJumpAt = -999f;
         }
@@ -443,6 +479,11 @@ public class PlayerController : MonoBehaviour
     {
         if (!controlEnabled) return;
 
+        // The ragdoll switches the controller off and owns the body until the respawn. Moving a
+        // disabled CharacterController is an error per frame, not a silent no-op, so this is the
+        // backstop for any path that hands control back before the body is handed back.
+        if (!cc.enabled) return;
+
         if (cc.isGrounded) lastGroundedTime = Time.time;
 
         TrackAirborne();
@@ -620,6 +661,12 @@ public class PlayerController : MonoBehaviour
         if (!freeze) slideClipTime += Time.deltaTime;
         SetSlideSpeed(freeze ? 0f : 1f);
 
+        // Two ways a slide gets prolonged, and both count. Freezing the pose is the one that does the
+        // work — every frame held there is a frame the clip does not advance, so the slide outlives its
+        // own animation. The second catches a slide still being stretched past the point it would
+        // otherwise have ended. Either way the player leaned on it, and owes the recovery.
+        if (freeze || (stretch && elapsed >= slideDuration)) slideWasProlonged = true;
+
         if (stretch)
         {
             // Hold the deadline a frame ahead, so IsSliding stays true and the decision is re-made
@@ -707,8 +754,14 @@ public class PlayerController : MonoBehaviour
         // Returning false while already sliding is what makes a second tap a no-op rather
         // than a queued second slide — the trigger is never set, so nothing can replay it.
         if (!cc.isGrounded || IsSliding) return false;
+
+        // Standing out the recovery from the last long slide. Refused rather than queued, so holding
+        // the button through the recovery does not buy a slide the instant it expires.
+        if (IsSlideRecovering) return false;
+
         slideStartedAt = Time.time;
         slideClipTime = 0f;
+        slideWasProlonged = false;
         warnedSlideStuck = false;
         SetSlideSpeed(1f);
         SetSlidingFlag(true);
@@ -719,8 +772,21 @@ public class PlayerController : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// Stands the runner back up, and charges a recovery period if the slide they are leaving had been
+    /// prolonged. Holding and blocked-under-geometry both count: either way the runner spent longer
+    /// down than one slide is worth, and the point of the recovery is that they have to be seen back
+    /// on their feet before they may go down again.
+    /// </summary>
     void EndSlide()
     {
+        // Guarded on actually having been sliding. EndSlide is also called when nothing is sliding at
+        // all — control being taken away, a roll starting, a respawn — and a flag left over from an
+        // earlier slide would otherwise charge a recovery for nothing.
+        if (slideEndsAt >= 0f && slideWasProlonged && slideRecoveryTime > 0f)
+            slideRecoveryUntil = Time.time + slideRecoveryTime;
+
+        slideWasProlonged = false;
         slideEndsAt = -1f;
         slideClipTime = 0f;
         SetSlideSpeed(1f);   // never leave the state frozen for the next slide to inherit
@@ -757,7 +823,33 @@ public class PlayerController : MonoBehaviour
         float surfaceTop = hit.collider.bounds.max.y;
         if (surfaceTop - feetY <= cc.stepOffset + ledgeTolerance) return;
 
-        if (RunManager.Instance != null) RunManager.Instance.Kill();
+        // The normal goes with it: it points out of the wall, which is the direction the runner
+        // should be thrown, and only this method knows it.
+        if (RunManager.Instance != null) RunManager.Instance.Kill(hit.normal);
+    }
+
+    /// <summary>
+    /// Ends the run and, if a ragdoll has been built, hands the body over to physics. Called by
+    /// RunManager rather than reached directly, so run state and the visible collapse stay in step.
+    /// </summary>
+    public void Die(Vector3 impactNormal)
+    {
+        // Read before control is dropped — EnableControl(false) zeroes verticalVelocity, and the
+        // fall the runner was in the middle of is half of what makes the collapse read right.
+        var velocity = CurrentVelocity;
+
+        EnableControl(false);
+        if (ragdoll != null) ragdoll.Activate(velocity, impactNormal);
+    }
+
+    /// <summary>
+    /// Takes the body back off physics, ready to be teleported to the checkpoint. Separate from
+    /// Teleport because the order matters: the skeleton has to be back in its rest pose before the
+    /// capsule is moved, or the ragdoll's last sprawl is what gets carried to the spawn point.
+    /// </summary>
+    public void Revive()
+    {
+        if (ragdoll != null) ragdoll.Deactivate();
     }
 
     /// <summary>
@@ -788,6 +880,7 @@ public class PlayerController : MonoBehaviour
     public void Teleport(Vector3 position)
     {
         EndSlide();
+        slideRecoveryUntil = -1f;   // a fresh start, not the tail of the slide they died in
         airborneSlideAt = -999f;   // a press from before the death must not fire on respawn
         airborneJumpAt = -999f;
         // Dying in mid-air used to leave leftGroundAt set, so TrackAirborne measured the fall as

@@ -22,8 +22,10 @@ public class RunManager : MonoBehaviour
     [SerializeField] FinishSequence finishSequence;
 
     [Header("Death")]
-    [Tooltip("Pause before the player is put back at the last checkpoint.")]
-    [SerializeField] float respawnDelay = 0.6f;
+    [Tooltip("Pause before the player is put back at the last checkpoint. Long enough for the ragdoll " +
+             "to actually land and settle — at the old 0.6s the body was still in the air when it was " +
+             "snatched back to the checkpoint.")]
+    [SerializeField] float respawnDelay = 1.5f;
 
     public RunState State { get; private set; } = RunState.Intro;
 
@@ -59,7 +61,11 @@ public class RunManager : MonoBehaviour
     /// <summary>Called by IntroSequence once the camera has landed on the runner.</summary>
     public void BeginRun()
     {
-        if (State == RunState.Running) return;
+        // Only ever leaves the intro. It used to refuse just the Running state, which meant a call
+        // arriving while the runner was dead would hand control back mid-collapse — with the
+        // CharacterController switched off under the ragdoll, that is a Move on a disabled controller
+        // every frame until the respawn cleans it up.
+        if (State != RunState.Intro) return;
         State = RunState.Running;
         runStartTime = Time.time;
         if (player != null) player.EnableControl(true);
@@ -93,13 +99,17 @@ public class RunManager : MonoBehaviour
         if (finishSequence != null) finishSequence.Play();
     }
 
-    /// <summary>Called by Obstacle on contact.</summary>
-    public void Kill()
+    /// <summary>
+    /// Called by PlayerController on a fatal contact. The normal points out of whatever was hit, and
+    /// is passed straight through to the ragdoll as the direction to throw the body. Defaulted so a
+    /// death with no surface behind it — a script, a future pit — still works.
+    /// </summary>
+    public void Kill(Vector3 impactNormal = default)
     {
         if (State != RunState.Running) return;
         State = RunState.Dead;
         Debug.Log($"[RunManager] Died at x={player.transform.position.x:F1}, respawning at {SpawnPoint}");
-        if (player != null) player.EnableControl(false);
+        if (player != null) player.Die(impactNormal);
         StartCoroutine(RespawnAfterDelay());
     }
 
@@ -108,6 +118,9 @@ public class RunManager : MonoBehaviour
         yield return new WaitForSeconds(respawnDelay);
         if (player != null)
         {
+            // Off physics, then moved, then given back the controls — see PlayerController.Revive
+            // for why that order is not interchangeable.
+            player.Revive();
             player.Teleport(SpawnPoint);
             player.EnableControl(true);
         }
