@@ -32,6 +32,12 @@ public class PlayerInputRouter : MonoBehaviour
 
     void OnEnable()
     {
+        // Cleared on the way in as well as the way out. SetTouchSlideHeld is a plain method and runs
+        // fine on a disabled component, so a finger landing on the slide button while the pause menu
+        // has the router switched off sets the flag after OnDisable already cleared it — and resuming
+        // would then extend the next slide with a button nobody is holding.
+        touchSlideHeld = false;
+
         OnJump += HandleJump;
         OnSlide += HandleSlide;
         if (swipeDetector != null)

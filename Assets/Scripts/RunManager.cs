@@ -32,6 +32,12 @@ public class RunManager : MonoBehaviour
     /// <summary>Where a death sends the player back to.</summary>
     public Vector3 SpawnPoint { get; private set; }
 
+    /// <summary>
+    /// The runner's X for the logs. Both call sites guard `player` on the following line, so
+    /// dereferencing it inside the message would have thrown before the guard could help.
+    /// </summary>
+    float PlayerX => player != null ? player.transform.position.x : float.NaN;
+
     readonly List<Checkpoint> reached = new List<Checkpoint>();
     Checkpoint lastCheckpoint;
     float runStartTime;
@@ -40,6 +46,11 @@ public class RunManager : MonoBehaviour
     void Awake()
     {
         Instance = this;
+
+        // A fresh run tally for the HUD. In Awake, so it lands before any Coin's Start — a coin that
+        // pays out on the first frame must count toward this run, not be wiped by the reset.
+        CoinWallet.BeginSession();
+
         if (player == null) player = FindFirstObjectByType<PlayerController>();
         if (finishSequence == null) finishSequence = FindFirstObjectByType<FinishSequence>();
     }
@@ -96,7 +107,7 @@ public class RunManager : MonoBehaviour
         if (State != RunState.Running) return;
         State = RunState.Finished;
         runEndTime = Time.time;
-        Debug.Log($"[RunManager] Finished at x={player.transform.position.x:F1} after {RunTime:F1}s");
+        Debug.Log($"[RunManager] Finished at x={PlayerX:F1} after {RunTime:F1}s");
 
         // Control is not taken away here — the runner has to keep running while the
         // camera pulls back. FinishSequence stops them once the shot is over.
@@ -112,7 +123,7 @@ public class RunManager : MonoBehaviour
     {
         if (State != RunState.Running) return;
         State = RunState.Dead;
-        Debug.Log($"[RunManager] Died at x={player.transform.position.x:F1}, respawning at {SpawnPoint}");
+        Debug.Log($"[RunManager] Died at x={PlayerX:F1}, respawning at {SpawnPoint}");
         if (player != null) player.Die(impactNormal);
         StartCoroutine(RespawnAfterDelay());
     }

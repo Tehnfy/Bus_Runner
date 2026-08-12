@@ -23,6 +23,8 @@ public class MenuController : MonoBehaviour
     [SerializeField] GameObject optionsPanel;
     [Tooltip("Reached from Options, and its Back returns there rather than to the main menu.")]
     [SerializeField] GameObject controlsPanel;
+    [Tooltip("Unlocks, once they exist. Carries an in-development notice and the coin balances for now.")]
+    [SerializeField] GameObject shopPanel;
 
     [Tooltip("One button per unlocked level is built into this at startup.")]
     [SerializeField] RectTransform levelList;
@@ -56,6 +58,7 @@ public class MenuController : MonoBehaviour
     public void ShowLevelSelect() => Show(levelSelectPanel);
     public void ShowOptions() => Show(optionsPanel);
     public void ShowControls() => Show(controlsPanel);
+    public void ShowShop() => Show(shopPanel);
 
     /// <summary>Starts the furthest level the player has unlocked.</summary>
     public void PlayLevel()
@@ -79,8 +82,6 @@ public class MenuController : MonoBehaviour
         SceneManager.LoadScene(levelScenes[index], LoadSceneMode.Single);
     }
 
-    public void QuitGame() => Application.Quit();
-
     void Show(GameObject panel)
     {
         // Every panel is addressed, not just the incoming one — otherwise whichever was
@@ -89,6 +90,7 @@ public class MenuController : MonoBehaviour
         if (levelSelectPanel != null) levelSelectPanel.SetActive(panel == levelSelectPanel);
         if (optionsPanel != null) optionsPanel.SetActive(panel == optionsPanel);
         if (controlsPanel != null) controlsPanel.SetActive(panel == controlsPanel);
+        if (shopPanel != null) shopPanel.SetActive(panel == shopPanel);
     }
 
     /// <summary>
@@ -123,13 +125,7 @@ public class MenuController : MonoBehaviour
             button.targetGraphic = image;
             button.onClick.AddListener(() => LoadLevel(index));
 
-            var labelGo = new GameObject("Label", typeof(RectTransform));
-            labelGo.transform.SetParent(go.transform, false);
-            var rect = (RectTransform)labelGo.transform;
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
+            var labelGo = UiRect.Stretch(go.transform, "Label");
 
             var label = labelGo.AddComponent<Text>();
             label.font = font;
@@ -140,20 +136,5 @@ public class MenuController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// The serialized font if it was wired, otherwise the built-in one. Unity renamed
-    /// Arial.ttf to LegacyRuntime.ttf, so both names are tried before giving up —
-    /// a legacy Text with no font draws nothing at all.
-    /// </summary>
-    Font BuiltinFont()
-    {
-        if (levelButtonFont != null) return levelButtonFont;
-
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf")
-                   ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
-        if (font == null)
-            Debug.LogWarning("[MenuController] No font on levelButtonFont and no built-in fallback — " +
-                             "level buttons will have no label.");
-        return font;
-    }
+    Font BuiltinFont() => UiRect.ResolveFont(levelButtonFont, "MenuController");
 }

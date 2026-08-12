@@ -1,9 +1,5 @@
 using UnityEngine;
 
-/// <summary>
-/// Auto-runs the player along +X. Jump and slide are one-shot actions driven by
-/// PlayerInputRouter. Movement is XY only — Z is pinned so the 2.5D lane holds.
-/// </summary>
 /// <summary>Which hand, if any, is planted on the ground during a slide.</summary>
 public enum SlideHand
 {
@@ -13,6 +9,10 @@ public enum SlideHand
     Both,
 }
 
+/// <summary>
+/// Auto-runs the player along +X. Jump and slide are one-shot actions driven by
+/// PlayerInputRouter. Movement is XY only — Z is pinned so the 2.5D lane holds.
+/// </summary>
 [RequireComponent(typeof(CharacterController))]
 public class PlayerController : MonoBehaviour
 {
@@ -175,35 +175,33 @@ public class PlayerController : MonoBehaviour
 
     CharacterController cc;
     Animator animator;
-    // Optional. A player without a built ragdoll simply freezes on death, as it always did.
+    // Optional. Without a built ragdoll the runner just freezes on death.
     PlayerRagdoll ragdoll;
 
     float verticalVelocity;
     float lastGroundedTime;
     PlayerInputRouter inputRouter;
     float slideEndsAt = -1f;
-    // When the current slide began. Elapsed time is measured from here rather than from the
-    // deadline, because the deadline moves while the slide is being extended.
+    // Elapsed slide time is measured from here, not back from the deadline — the deadline moves
+    // while the slide is being extended.
     float slideStartedAt;
-    // How much of the slide animation has actually played. Stops advancing while the pose is frozen,
-    // which is what lets the recovery still get its full run after a long hold.
+    // Slide animation actually played. Stops while the pose is frozen, so the recovery still gets
+    // its full run after a long hold.
     float slideClipTime;
-    // Latched so a runner stuck under geometry past every allowance complains once, not every frame.
+    // Latched, so a runner stuck past every allowance complains once rather than every frame.
     bool warnedSlideStuck;
-    // Set when a long slide ends. Until this passes, the runner has to stay on their feet.
+    // Set when a long slide ends. Until it passes, the runner has to stay on their feet.
     float slideRecoveryUntil = -1f;
-    // Whether the slide in progress was made to outlast its clip by the player holding the button.
-    // Latched during the slide rather than worked out from its total length at the end: an ordinary
-    // slide measures a frame or two over slideDuration purely from frame quantisation, and comparing
-    // totals charged a plain 0.70s tap as if it had been a long one.
+    // Whether the player's hold made this slide outlast its clip. Latched during the slide rather
+    // than derived from its total length at the end: frame quantisation puts an ordinary tap a frame
+    // over slideDuration, and comparing totals charged a plain 0.70s tap as a long one.
     bool slideProlongedByHold;
-    // Set when a held long slide ends, cleared when an ordinary one does. While set, the slide button
-    // cannot extend anything — so two long slides can never run back to back.
+    // Set when a held long slide ends, cleared when an ordinary one does. While set the slide button
+    // cannot extend anything, so two long slides never run back to back.
     bool slideHoldDisarmed;
 
-    // Pitch currently applied to the body, in degrees, and the SmoothDamp velocity carrying it. Kept
-    // as state rather than recomputed each frame because levelling out in mid-air is a decay from
-    // wherever the last slope left it, not a jump to zero.
+    // Pitch applied to the body, in degrees, with its SmoothDamp velocity. Kept as state because
+    // levelling out in mid-air decays from wherever the last slope left it rather than jumping to zero.
     float slidePitch;
     float slidePitchVelocity;
 
@@ -211,8 +209,7 @@ public class PlayerController : MonoBehaviour
     float slideHugDrop;
     float slideHugVelocity;
 
-    // Arm chains for the planted hand, cached with their bone lengths. Bones do not change length, so
-    // the reach only has to be measured once.
+    // Arm chains for the planted hand. Bones never change length, so reach is measured once.
     Transform rightUpperArm, rightLowerArm, rightHand;
     Transform leftUpperArm, leftLowerArm, leftHand;
     float rightArmReach, leftArmReach;
@@ -220,6 +217,11 @@ public class PlayerController : MonoBehaviour
     // Blend on the hand correction, eased so it arrives and leaves with the slide.
     float slideHandWeight;
     float slideHandWeightVelocity;
+    // The last surface the hand was actually solved against, held so the ease-out has something real
+    // to let go of after the probe stops finding ground.
+    Vector3 handGroundPoint;
+    Vector3 handGroundNormal = Vector3.up;
+    bool handGroundValid;
     float lockedZ;
 
     float standHeight;
@@ -233,24 +235,54 @@ public class PlayerController : MonoBehaviour
     // Set for the outro: legs keep moving, but jump and slide are ignored.
     bool actionsLocked;
 
-    // Roll: when we left the ground (-1 while grounded), and how long the landing
-    // roll owns the input. Separate from lastGroundedTime, which TryJump clears to
-    // burn the coyote window and so cannot measure a fall.
+    // Last value pushed into the Slide state's speed, so an unchanged write can be skipped.
+    float lastSlideSpeed = 1f;
+
+    // When we left the ground, -1 while grounded. Separate from lastGroundedTime, which TryJump
+    // clears to burn the coyote window and so cannot measure a fall.
     float leftGroundAt = -1f;
     float rollEndsAt = -1f;
     float rollInputLockUntil = -1f;
     float rollDuration;
 
+    // How far above the feet a self-excluded query starts, so the floor the runner is standing on is
+    // never the thing it finds.
+    const float GroundLift = 0.05f;
+
     const string RollClipName = "Roll";
-    // Float parameter the Roll state multiplies its own speed by. Added by Set Up Landing Roll.
+    // Float the Roll state multiplies its own speed by. Added by Set Up Landing Roll.
     const string RollSpeedParameter = "RollSpeed";
-    // Float the Slide state multiplies its own speed by. 0 holds the pose for a stretched slide.
+    // Float the Slide state multiplies its own speed by. 0 freezes the pose for a stretched slide.
     const string SlideSpeedParameter = "SlideSpeed";
-    // Bool that keeps the Slide state alive; its exit used to be an unconditional clip-time one.
+    // Bool that holds the Slide state open, replacing an unconditional clip-time exit.
     const string SlidingParameter = "Sliding";
 
-    // A mid-air slide press, held until touchdown or until it goes stale. Never set by a press
-    // made while already sliding, and cleared the moment it is used.
+    // Animator parameters addressed by hash. The string overloads hash the name natively on every
+    // call, and Grounded is written every single frame.
+    static readonly int JumpTrigger = Animator.StringToHash("Jump");
+    static readonly int SlideTrigger = Animator.StringToHash("Slide");
+    static readonly int RollTrigger = Animator.StringToHash("Roll");
+    static readonly int GroundedBool = Animator.StringToHash("Grounded");
+    static readonly int SlidingBool = Animator.StringToHash(SlidingParameter);
+    static readonly int SlideSpeedFloat = Animator.StringToHash(SlideSpeedParameter);
+    static readonly int RollSpeedFloat = Animator.StringToHash(RollSpeedParameter);
+
+    // Which optional parameters the wired controller actually declares, resolved once. Reading
+    // animator.parameters allocates a fresh array plus one object per parameter, and the old
+    // existence check ran through SetSlideSpeed on every frame of every slide — the largest single
+    // GC source in the project.
+    bool hasSlideSpeedParameter;
+    bool hasSlidingParameter;
+    bool hasRollSpeedParameter;
+
+    // Raw length of the roll clip, read once. Reaching it goes through
+    // runtimeAnimatorController.animationClips, which allocates the whole controller's clip array —
+    // and BeginRoll used to do that on the landing frame of every roll. Negative means "no such clip",
+    // so the serialized fallback is used instead.
+    float rollClipLength = -1f;
+
+    // A mid-air slide press, held until touchdown or until it goes stale. Never set by a press made
+    // while already sliding, and cleared the moment it is used.
     float airborneSlideAt = -999f;
     // Same, for jump.
     float airborneJumpAt = -999f;
@@ -266,12 +298,9 @@ public class PlayerController : MonoBehaviour
         HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot,
     };
     Transform[] silhouetteBones;
-    // Toes, for the ground-contact test only. Absent from the silhouette set, which answers "how tall
-    // is this pose" and has no business consulting a toe.
-    //
-    // Hands and forearms were in here on the theory that a trailing arm could be the lowest thing.
-    // Measured across the whole slide clip: they never are, and including them changed the answer by
-    // exactly nothing, so they are gone.
+    // Toes, for the ground-contact test only — the silhouette set answers "how tall is this pose"
+    // and has no business consulting a toe. Hands and forearms were tried here on the theory that a
+    // trailing arm could be the lowest thing; measured across the clip they never are.
     static readonly HumanBodyBones[] ExtremityBoneIds =
     {
         HumanBodyBones.LeftToes, HumanBodyBones.RightToes,
@@ -286,44 +315,32 @@ public class PlayerController : MonoBehaviour
     float headTopOffset;
     bool headOffsetCalibrated;
 
-    public bool IsSliding => Time.time < slideEndsAt;
-    public bool IsGrounded => cc.isGrounded || Time.time - lastGroundedTime < coyoteTime;
+    // Everything below is internal state. The external API is seven verbs: EnableControl,
+    // LockActions, Die, Revive, Teleport, Jump, Slide.
+    bool IsSliding => Time.time < slideEndsAt;
+    bool IsGrounded => cc.isGrounded || Time.time - lastGroundedTime < coyoteTime;
 
     /// <summary>
-    /// World velocity the runner is carrying. Read by the ragdoll on death so the collapse continues
-    /// the motion instead of dropping from a standstill — the same vector Update feeds to cc.Move.
+    /// World velocity the runner is carrying — the same vector Update feeds to cc.Move. Handed to the
+    /// ragdoll on death so the collapse continues the motion instead of dropping from a standstill.
     /// </summary>
-    public Vector3 CurrentVelocity => new Vector3(runSpeed, verticalVelocity, 0f);
+    Vector3 CurrentVelocity => new Vector3(runSpeed, verticalVelocity, 0f);
 
     /// <summary>True for the length of the roll clip after a long fall.</summary>
-    public bool IsRolling => Time.time < rollEndsAt;
+    bool IsRolling => Time.time < rollEndsAt;
 
-    /// <summary>
-    /// True while the runner is serving out the mandatory stand after a long slide. Nothing else
-    /// reads it — it exists so the state is inspectable from a test or a debug readout, because
-    /// "the slide did not start" is otherwise indistinguishable from a dropped input.
-    /// </summary>
-    public bool IsSlideRecovering => Time.time < slideRecoveryUntil;
-
-    /// <summary>
-    /// True while the slide button cannot extend anything, because the last slide was a held long one.
-    /// Cleared by serving an ordinary slide. Exposed for the same reason as IsSlideRecovering — a hold
-    /// that quietly does nothing is otherwise indistinguishable from a dropped input.
-    /// </summary>
-    public bool IsSlideHoldDisarmed => slideHoldDisarmed;
-
-    /// <summary>Tilt currently applied to the body by the slide pitch, in degrees. Negative is nose-down.</summary>
-    public float SlidePitch => slidePitch;
+    /// <summary>True while the runner is serving out the mandatory stand after a long slide.</summary>
+    bool IsSlideRecovering => Time.time < slideRecoveryUntil;
 
     /// <summary>Jump and slide are swallowed while this holds — the outro, or a landing roll's brief lock.</summary>
     bool ActionsBlocked => actionsLocked || Time.time < rollInputLockUntil;
 
     /// <summary>
-    /// 0 at the start of a slide, 1 once a normal slide's worth of time has passed. Reads 1 when not
-    /// sliding, and stays at 1 through an extension — measured from the start rather than back from
-    /// the deadline, because the deadline moves while a slide is held or blocked.
+    /// 0 at the start of a slide, 1 once a normal slide's worth of time has passed, and 1 when not
+    /// sliding. Measured from the start rather than back from the deadline, which moves while a
+    /// slide is held or blocked.
     /// </summary>
-    public float SlideProgress =>
+    float SlideProgress =>
         IsSliding && slideDuration > 0f
             ? Mathf.Clamp01((Time.time - slideStartedAt) / slideDuration)
             : 1f;
@@ -332,8 +349,8 @@ public class PlayerController : MonoBehaviour
     {
         cc = GetComponent<CharacterController>();
         animator = GetComponent<Animator>();
-        // Asked whether the slide button is still down. The router is the only thing that knows,
-        // because it is the only thing that sees both the keyboard and the on-screen button.
+        // Asked whether the slide button is still down — the router is the only thing that sees both
+        // the keyboard and the on-screen button.
         inputRouter = GetComponent<PlayerInputRouter>();
         ragdoll = GetComponent<PlayerRagdoll>();
 
@@ -346,10 +363,13 @@ public class PlayerController : MonoBehaviour
 
         CacheSilhouetteBones();
         CalibrateHeadOffset();   // bind pose is close enough to standing; LateUpdate refines if not
+        InspectAnimatorController();
         ResolveRollDuration();
 
-        // Intro holds control until RunManager.BeginRun().
-        controlEnabled = false;
+        // Intro holds control until RunManager.BeginRun(). Routed through EnableControl rather than
+        // setting the flag directly, so the animator is stopped too — otherwise the run cycle plays
+        // at full speed through the whole intro while the runner stands still.
+        EnableControl(false);
     }
 
     public void EnableControl(bool enabled)
@@ -359,22 +379,66 @@ public class PlayerController : MonoBehaviour
         {
             verticalVelocity = 0f;
             EndSlide();
-            // Cleared after EndSlide, which may have just charged them. Losing control is not a
-            // penalty the player should still be paying when they get it back.
-            slideRecoveryUntil = -1f;
-            slideHoldDisarmed = false;
-            // Snapped rather than eased: control coming back is a fresh start, and easing from an old
-            // slope would show the runner righting themselves from a tilt they never earned.
-            slidePitch = 0f;
-            slidePitchVelocity = 0f;
-            slideHugDrop = 0f;
-            slideHugVelocity = 0f;
-            slideHandWeight = 0f;
-            slideHandWeightVelocity = 0f;
-            airborneSlideAt = -999f;
-            airborneJumpAt = -999f;
+            // After EndSlide, which may have just charged them. Losing control is not a penalty the
+            // player should still be paying when they get it back.
+            ClearSlideDebt();
+            ResetSlideCosmetics();
+            ClearBufferedInput();
+            CancelRoll();
         }
         if (animator != null) animator.speed = enabled ? 1f : 0f;
+    }
+
+    /// <summary>
+    /// Zeroes the three eased slide corrections and their SmoothDamp velocities.
+    ///
+    /// Snapped rather than eased, because every caller is a discontinuity — control returning, a
+    /// respawn. Easing from an old slope would show the runner righting themselves from a tilt they
+    /// never earned.
+    /// </summary>
+    void ResetSlideCosmetics()
+    {
+        slidePitch = 0f;
+        slidePitchVelocity = 0f;
+        slideHugDrop = 0f;
+        slideHugVelocity = 0f;
+        slideHandWeight = 0f;
+        slideHandWeightVelocity = 0f;
+        handGroundValid = false;
+    }
+
+    /// <summary>
+    /// Forgives what the last slide charged: the mandatory stand, and the disarmed button. Kept
+    /// apart from ResetSlideCosmetics because losing control forgives the debt while an ordinary
+    /// EndSlide is what levies it.
+    /// </summary>
+    void ClearSlideDebt()
+    {
+        slideRecoveryUntil = -1f;
+        slideHoldDisarmed = false;
+    }
+
+    /// <summary>Drops both held airborne presses, so neither can fire after the thing that cleared them.</summary>
+    void ClearBufferedInput()
+    {
+        airborneSlideAt = -999f;
+        airborneJumpAt = -999f;
+    }
+
+    /// <summary>
+    /// Ends any roll in progress outright.
+    ///
+    /// Both deadlines have to go, not just the visual one: rollEndsAt keeps LevelRollPose rotating
+    /// the hips, and rollInputLockUntil keeps ActionsBlocked swallowing jump and slide. Dying mid-roll
+    /// used to carry both across the respawn, so the runner could arrive at the checkpoint mid-tumble
+    /// and unable to act. respawnDelay usually outlasts the roll and hid it, but pausing while dead
+    /// freezes Time.time and the respawn coroutine together, which made it a timing accident rather
+    /// than a guarantee.
+    /// </summary>
+    void CancelRoll()
+    {
+        rollEndsAt = -1f;
+        rollInputLockUntil = -1f;
     }
 
     /// <summary>
@@ -387,64 +451,76 @@ public class PlayerController : MonoBehaviour
         if (locked)
         {
             EndSlide();
-            airborneSlideAt = -999f;
-            airborneJumpAt = -999f;
+            ClearBufferedInput();
         }
     }
 
     /// <summary>
-    /// Reads the roll length off the clip rather than trusting a number typed into the inspector,
-    /// so retiming or replacing the animation cannot leave the input lock running long or short.
+    /// Reads the roll length off the clip, so retiming or replacing the animation cannot leave the
+    /// deadlines wrong.
     ///
-    /// Also pushes the playback speed into the animator, and divides the length by it. Those two
-    /// have to happen together: the Roll state's speed and the deadlines derived from it are the
-    /// same number, and if only one of them changed the levelling would still be correcting a pose
-    /// the state machine had already handed back to Run.
-    ///
-    /// Re-run on every roll, so dialling the speed in the inspector takes effect on the next one.
+    /// Pushing the playback speed into the animator and dividing the length by it have to happen
+    /// together, or the levelling would still be correcting a pose the state machine had already
+    /// handed back to Run. Re-run on every roll, so an inspector change takes effect on the next one.
     /// </summary>
     void ResolveRollDuration()
     {
         float speed = Mathf.Max(0.01f, rollPlaybackSpeed);
 
-        rollDuration = rollDurationFallback / speed;
-        if (animator == null || animator.runtimeAnimatorController == null) return;
+        rollDuration = (rollClipLength >= 0f ? rollClipLength : rollDurationFallback) / speed;
+        if (animator != null && hasRollSpeedParameter) animator.SetFloat(RollSpeedFloat, speed);
+    }
 
-        if (HasFloatParameter(RollSpeedParameter)) animator.SetFloat(RollSpeedParameter, speed);
+    /// <summary>
+    /// One-time inspection of the wired controller: which optional parameters it declares, and how
+    /// long the roll clip is. Both answers come from allocating APIs, and both are fixed for the
+    /// lifetime of the controller, so they are taken once here rather than per frame or per roll.
+    ///
+    /// A controller that has not been through Set Up Landing Roll or Set Up Slide Hold simply lacks
+    /// the parameter, and writing a missing one logs on every write.
+    /// </summary>
+    void InspectAnimatorController()
+    {
+        if (animator == null) return;
 
+        foreach (var parameter in animator.parameters)
+        {
+            if (parameter.type == AnimatorControllerParameterType.Float)
+            {
+                if (parameter.name == SlideSpeedParameter) hasSlideSpeedParameter = true;
+                else if (parameter.name == RollSpeedParameter) hasRollSpeedParameter = true;
+            }
+            else if (parameter.type == AnimatorControllerParameterType.Bool
+                     && parameter.name == SlidingParameter)
+            {
+                hasSlidingParameter = true;
+            }
+        }
+
+        if (animator.runtimeAnimatorController == null) return;
         foreach (var clip in animator.runtimeAnimatorController.animationClips)
         {
             if (clip == null || clip.name != RollClipName) continue;
-            rollDuration = clip.length / speed;
+            rollClipLength = clip.length;
             return;
         }
     }
 
     /// <summary>
-    /// Guards the SetFloat above. A controller that has not been through Set Up Landing Roll has no
-    /// RollSpeed parameter, and writing a missing one logs on every roll.
-    /// </summary>
-    bool HasFloatParameter(string name)
-    {
-        foreach (var parameter in animator.parameters)
-            if (parameter.type == AnimatorControllerParameterType.Float && parameter.name == name)
-                return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Landing after a long fall. The runner keeps moving — a roll carries momentum — and jump
-    /// and slide are swallowed only for rollInputLockDuration, a fraction of a second, so the
-    /// roll never costs the player control of the landing. Nothing is remembered: a press inside
-    /// that window is dropped, not queued.
+    /// Landing after a long fall. The runner keeps moving — a roll carries momentum — and input is
+    /// swallowed only for rollInputLockDuration. Nothing is remembered: a press inside that window
+    /// is dropped, not queued.
     /// </summary>
     void BeginRoll()
     {
         EndSlide();
+        // The slide corrections all write hipsBone, and so does LevelRollPose. Left decaying into the
+        // roll they fight it for the same transform, so the roll takes the bone outright.
+        ResetSlideCosmetics();
         ResolveRollDuration();   // picks up an inspector change to the playback speed
         rollEndsAt = Time.time + rollDuration;
         rollInputLockUntil = Time.time + Mathf.Clamp(rollInputLockDuration, 0f, rollDuration);
-        if (animator != null) animator.SetTrigger("Roll");
+        if (animator != null) animator.SetTrigger(RollTrigger);
     }
 
     void CacheSilhouetteBones()
@@ -488,9 +564,8 @@ public class PlayerController : MonoBehaviour
         float remaining = rollEndsAt - Time.time;
         float elapsed = rollDuration - remaining;
 
-        // Eased at both ends, not just the exit. The clip's very first frame already carries about
-        // 23 degrees of pelvis twist, so snapping the correction on at entry pops exactly as much
-        // as dropping it at the handoff to Run.
+        // Eased at both ends, not just the exit: the clip's first frame already carries about 23
+        // degrees of pelvis twist, so snapping on at entry pops as much as dropping at the handoff.
         return rollLevelStrength
                * Mathf.Min(Mathf.Clamp01(elapsed / ramp), Mathf.Clamp01(remaining / ramp));
     }
@@ -498,38 +573,26 @@ public class PlayerController : MonoBehaviour
     /// <summary>
     /// Flattens the roll clip's corkscrew back into the plane the runner travels in.
     ///
-    /// "Quick Roll To Run" is a shoulder roll. Its pitch sweeps a clean 360 degrees in the travel
-    /// plane — the somersault itself is correct — but the body also leans up to 46 degrees out of
-    /// that plane, twice and in opposite directions, and comes up twisted. That corkscrew is what
-    /// reads as rolling sideways. It lives entirely in the pose: applyRootMotion is off, so no root
-    /// curve reaches the character, and nothing done to the capsule's own orientation can touch it.
+    /// "Quick Roll To Run" is a shoulder roll: the somersault itself is correct, but the body also
+    /// leans up to 46 degrees out of the travel plane, twice and in opposite directions, and comes up
+    /// twisted. That lives entirely in the pose — applyRootMotion is off — so nothing done to the
+    /// capsule can touch it.
     ///
-    /// The fix rotates the spine onto its own projection into the travel plane, pivoting on the
-    /// hips. Both of those choices were arrived at by measurement, and both matter:
-    ///
-    ///   Axis. Rotating about the travel axis cannot work. Mid-roll the spine points forward, and a
-    ///   rotation about forward then spins the body along its own length without moving the spine at
-    ///   all — measured, it drove the lean from 46 degrees up to 73. The rotation has to be the one
+    /// Two measured choices, both load-bearing:
+    ///   Axis. Rotating about the travel axis spins the body along its own length without moving the
+    ///   spine at all — measured, it drove the lean from 46 degrees to 73. It has to be the rotation
     ///   that maps the spine onto its target, which is what FromToRotation gives.
+    ///   Pivot. The hips, not the root. The root sits at the feet, so pivoting there swings the body
+    ///   off the lane and pushes feet through the floor.
     ///
-    ///   Pivot. The hips, not the root. The root sits at the feet, so pivoting there swings the
-    ///   whole body off the lane and pushes feet through the floor. The hips are the mass centre,
-    ///   so the correction untwists rather than translates.
+    /// Stage one aligns the spine but leaves rotation about the spine free, and that leftover freedom
+    /// is the spin — the pelvis swings about 140 degrees about the spine and back within a sixth of
+    /// the clip. Stage two removes it, reading the twist off the pelvis rather than the shoulder line:
+    /// the pelvis is rigid, and the ~25 degree disagreement between them at the ends is the natural
+    /// shoulder counter-rotation of a run, which should be preserved.
     ///
-    /// It takes two stages, because aligning the spine only fixes where the spine points and leaves
-    /// rotation about the spine completely free — measurement confirmed the twist was bit-identical
-    /// before and after stage one. That leftover freedom is the spin: the pelvis swings about 140
-    /// degrees about the spine and back within a sixth of the clip, with dot(hips.right, lateral)
-    /// running 0.92 to -0.46 and back to 1.00. Stage two removes it.
-    ///
-    /// The twist is read off the pelvis rather than the shoulder line. The pelvis is rigid, so a
-    /// mid-roll tuck cannot drag its axis around, and both references agreed on the shape while
-    /// disagreeing by about 25 degrees at the ends — that gap is the natural shoulder counter-
-    /// rotation of a run, which should be preserved, not flattened.
-    ///
-    /// Measured at full strength, both stages, against the raw clip: lean 46 degrees to 0, twist
-    /// 167 degrees to 0, worst foot clearance 0.07 to 0.06, and lateral offset 0.79 to 0.72. The
-    /// body ends up more centred than the untouched clip, which is why this is on by default.
+    /// Measured at full strength against the raw clip: lean 46 degrees to 0, twist 167 to 0, worst
+    /// foot clearance 0.07 to 0.06, lateral offset 0.79 to 0.72.
     /// </summary>
     void LevelRollPose()
     {
@@ -549,12 +612,12 @@ public class PlayerController : MonoBehaviour
         if (flat.sqrMagnitude < 1e-6f) return;
         flat.Normalize();
 
-        // Rotating the hips carries every descendant with it about the hip joint, which is the
-        // pivot we want; the hips' own position is left where the clip put it.
+        // Rotating the hips carries every descendant about the hip joint; their own position is
+        // left where the clip put it.
         hipsBone.rotation = Quaternion.Slerp(
             Quaternion.identity, Quaternion.FromToRotation(spine, flat), weight) * hipsBone.rotation;
 
-        // Stage two: take the corkscrew out of the one axis stage one left free. Re-read the spine
+        // Stage two: take the corkscrew out of the axis stage one left free. Re-read the spine
         // first — stage one just moved it.
         var axis = (headBone.position - hipsBone.position).normalized;
         var pelvis = hipsBone.right;
@@ -568,21 +631,15 @@ public class PlayerController : MonoBehaviour
 
     /// <summary>
     /// Tilts the body to lie along the ground while sliding, and eases it back to flat when there is
-    /// no ground to lie along.
+    /// no ground to lie along. Applied to the hips for the same reason as LevelRollPose; the capsule
+    /// is left alone because LateUpdate pins its orientation to hold the 2.5D lane.
     ///
-    /// The tilt goes onto the hips, which carries the whole skeleton rigidly about the hip joint — the
-    /// same pivot and the same reason as LevelRollPose. The capsule is left alone: its orientation is
-    /// pinned every LateUpdate to hold the 2.5D lane, so a tilt applied there would be overwritten on
-    /// the spot.
+    /// The target comes from the surface tangent rather than the normal's angle, which makes the sign
+    /// correct by construction — SignedAngle(forward, tangent) is by definition the rotation mapping
+    /// travel onto the slope, so downhill is nose-down with no hand-picked sign to get wrong.
     ///
-    /// The target angle is derived from the surface tangent rather than from the normal's angle, which
-    /// makes the sign correct by construction: rotating by SignedAngle(forward, tangent) about the
-    /// lateral axis is by definition the rotation that maps the travel direction onto the slope, so
-    /// downhill comes out nose-down and uphill nose-up without a hand-picked sign to get wrong.
-    ///
-    /// Airborne, the target is flat and the approach is slower — that is the whole of the "flying off a
-    /// ramp evens out" behaviour, and it works from any launch angle because it decays from wherever
-    /// the slope left the body rather than resetting.
+    /// Airborne the target is flat and the approach slower. That is the whole of "flying off a ramp
+    /// evens out", and it works from any launch angle because it decays rather than resetting.
     /// </summary>
     void ApplySlidePitch(bool hasGround, Vector3 normal)
     {
@@ -613,18 +670,13 @@ public class PlayerController : MonoBehaviour
 
     /// <summary>
     /// Sinks the body until it meets the surface, so a slide reads as contact rather than a hover.
+    /// Worked out from bone positions plus a constant offset (slideMeshBelowBone) — baking the
+    /// skinned mesh every frame to find its true lowest vertex costs far too much for a few
+    /// centimetres of polish.
     ///
-    /// The drop is worked out from bone positions rather than from the skinned mesh: baking the mesh
-    /// every frame to find its true lowest vertex is far too expensive for what amounts to a few
-    /// centimetres of polish, and the offset between the two is stable enough to fold into a constant
-    /// (slideMeshBelowBone, measured at about 0.02 across the clip).
-    ///
-    /// Clamped to positive values, so this only ever lowers the runner. Lifting them would be the wrong
-    /// correction in the one case it could fire — the standing pose already dips 0.005 through the road
-    /// and nobody has ever noticed, because a foot slightly in the ground reads as contact while a foot
-    /// slightly above it reads as levitation.
-    ///
-    /// Runs after the pitch, which is what decides where the lowest point of the body actually is.
+    /// Clamped positive, so this only ever lowers the runner: a foot slightly in the ground reads as
+    /// contact, a foot slightly above it reads as levitation. Runs after the pitch, which is what
+    /// decides where the lowest point of the body actually is.
     /// </summary>
     void ApplySlideGroundHug(bool hasGround, Vector3 groundPoint, Vector3 groundNormal)
     {
@@ -633,14 +685,13 @@ public class PlayerController : MonoBehaviour
         float target = 0f;
         if (hasGround)
         {
-            // Measured against the ground PLANE, not against the ground height under the root. A prone
-            // body reaches about half a unit along the lane, so on a 20 degree slope the surface under
-            // its far end is 0.18 away from the surface under its middle — comparing heights sank the
-            // runner 0.077 downhill and left them hovering 0.046 uphill. The plane costs nothing extra:
-            // the probe already returns a point and a normal.
+            // Against the ground PLANE, not the ground height under the root. A prone body reaches
+            // about half a unit along the lane, so on a 20 degree slope the surface under its far end
+            // is 0.18 from the surface under its middle — comparing heights sank the runner 0.077
+            // downhill and left them hovering 0.046 uphill. The probe already returns both.
             float clearance = LowestDistanceAbovePlane(groundPoint, groundNormal) - slideMeshBelowBone;
 
-            // The gap is perpendicular to the slope but the body is moved vertically, so it has to be
+            // The gap is perpendicular to the slope but the body moves vertically, so it has to be
             // divided back out or a slope would only ever be partly closed.
             float lean = Mathf.Max(0.2f, Vector3.Dot(groundNormal, Vector3.up));
             target = Mathf.Clamp((clearance - slideGroundClearance) / lean, 0f, slideHugMaxDrop);
@@ -650,40 +701,54 @@ public class PlayerController : MonoBehaviour
                                        Mathf.Max(0.001f, slideHugSmoothTime));
 
         if (slideHugDrop <= 0.001f) return;
-        // Moving the hips carries every bone with it, the same lever the pitch and the roll levelling use.
+        // Moving the hips carries every bone with it — the same lever the pitch and levelling use.
         hipsBone.position -= Vector3.up * slideHugDrop;
     }
 
     /// <summary>
-    /// Plants a hand on the ground for the length of the slide.
+    /// Plants a hand on the ground for the length of the slide. Runs last of the three slide
+    /// corrections: the pitch and the drop both move the shoulder, so solving earlier would put the
+    /// hand where the shoulder used to be.
     ///
-    /// Runs last of the three slide corrections, because it has to aim at the surface the body has
-    /// actually ended up on — the pitch and the drop both move the shoulder, and solving before them
-    /// would put the hand where the shoulder used to be.
+    /// Unity's humanoid IK pass is the wrong tool here — it runs inside the Animator update, before
+    /// LateUpdate, so it cannot see the pitch or the drop.
     ///
-    /// Unity's humanoid IK pass would be the obvious tool and is the wrong one here: it runs inside the
-    /// Animator update, before LateUpdate, so it cannot see the pitch or the drop. Solving the two bones
-    /// directly keeps everything in one place and in the right order.
-    ///
-    /// The correction fades rather than straining. Measured, the right arm is 0.490 long while the
-    /// shoulder passes 0.388 to 0.475 above the ground through a slide — so late in the clip a planted
-    /// hand needs practically the whole arm locked straight down, which reads as a mannequin. Past
-    /// slideHandReachLimit the weight drops away and the animation is left to speak for itself.
+    /// The correction fades rather than straining. Measured, the arm is 0.490 long while the shoulder
+    /// passes 0.388 to 0.475 above the ground, so late in the clip a planted hand needs practically
+    /// the whole arm locked straight, which reads as a mannequin.
     /// </summary>
     void ApplySlideHandContact(bool hasGround, Vector3 groundPoint, Vector3 groundNormal)
     {
         if (slideGroundHand == SlideHand.None) return;
 
+        // Latch the real surface. The ease-out runs for several frames after hasGround has already
+        // gone false, and LateUpdate's fallback plane — the runner's own feet, normal up — is not a
+        // surface at all. Solving the arm onto it swung the hand at nothing for the first frames of
+        // every run-out. Easing against the last surface actually probed is what reads as letting go.
+        if (hasGround)
+        {
+            handGroundPoint = groundPoint;
+            handGroundNormal = groundNormal;
+            handGroundValid = true;
+        }
+
         float target = hasGround ? 1f : 0f;
         slideHandWeight = Mathf.SmoothDamp(slideHandWeight, target, ref slideHandWeightVelocity,
                                           Mathf.Max(0.001f, slideHandSmoothTime));
-        if (slideHandWeight <= 0.002f) return;
+        if (slideHandWeight <= 0.002f)
+        {
+            handGroundValid = false;
+            return;
+        }
+
+        // Never had a surface to plant on, so there is nothing to ease away from either.
+        if (!handGroundValid) return;
 
         if (slideGroundHand == SlideHand.RightHand || slideGroundHand == SlideHand.Both)
-            PlantHand(rightUpperArm, rightLowerArm, rightHand, rightArmReach, groundPoint, groundNormal);
+            PlantHand(rightUpperArm, rightLowerArm, rightHand, rightArmReach, handGroundPoint, handGroundNormal);
 
         if (slideGroundHand == SlideHand.LeftHand || slideGroundHand == SlideHand.Both)
-            PlantHand(leftUpperArm, leftLowerArm, leftHand, leftArmReach, groundPoint, groundNormal);
+            PlantHand(leftUpperArm, leftLowerArm, leftHand, leftArmReach, handGroundPoint, handGroundNormal);
     }
 
     void PlantHand(Transform upper, Transform lower, Transform hand, float reach,
@@ -692,18 +757,18 @@ public class PlayerController : MonoBehaviour
         if (upper == null || lower == null || hand == null || reach <= 0f) return;
 
         float above = Vector3.Dot(hand.position - groundPoint, groundNormal);
-        // Already touching, or through the surface. Pulling further would bury it; lifting is not this
-        // method's job.
+        // Already touching, or through the surface. Pulling further would bury it; lifting is not
+        // this method's job.
         if (above <= slideHandPalmOffset) return;
 
         float limit = reach * Mathf.Clamp(slideHandReachLimit, 0.1f, 1f);
         float shoulderAbove = Vector3.Dot(upper.position - groundPoint, groundNormal);
 
-        // Fade on whether the ground is reachable AT ALL, not on whether one particular spot on it is.
-        // Judging the specific spot made the hand give up the moment its own position went out of range,
-        // so it planted for a third of the slide and then let go; the runner can always just put the hand
-        // down closer in. What genuinely cannot be fixed is a shoulder further above the ground than the
-        // arm is long — which is exactly the opening frames, where it rides 0.63 to 1.34 up.
+        // Fade on whether the ground is reachable AT ALL, not on whether one particular spot is.
+        // Judging the spot made the hand let go the moment its own position went out of range, so it
+        // planted for a third of the slide — the runner can always put the hand down closer in. What
+        // genuinely cannot be fixed is a shoulder further up than the arm is long, which is exactly
+        // the opening frames, where it rides 0.63 to 1.34 above the ground.
         float slack = limit - (shoulderAbove - slideHandPalmOffset);
         float fade = Mathf.Clamp01(slack / (reach * 0.08f));
         if (fade <= 0.002f) return;
@@ -713,8 +778,8 @@ public class PlayerController : MonoBehaviour
         var shoulderFoot = upper.position - groundNormal * shoulderAbove + onPlane;
         var desired = hand.position - groundNormal * (above - slideHandPalmOffset);
 
-        // Drawn in toward the shoulder until the arm can actually get there, so the target stays ON the
-        // surface instead of hanging above it. The hand slides inward rather than lifting off.
+        // Drawn in toward the shoulder until the arm can reach, so the target stays ON the surface.
+        // The hand slides inward rather than lifting off.
         float maxAlongPlane = Mathf.Sqrt(Mathf.Max(0f, limit * limit -
                                                       (shoulderAbove - slideHandPalmOffset) *
                                                       (shoulderAbove - slideHandPalmOffset)));
@@ -722,10 +787,9 @@ public class PlayerController : MonoBehaviour
         if (alongPlane.magnitude > maxAlongPlane)
             desired = shoulderFoot + alongPlane.normalized * maxAlongPlane;
 
-        // The solve turns the forearm, and the hand is its child, so the wrist would come along for the
-        // ride and pitch the fingers into the ground — measured at 0.149 below the surface before this
-        // was put back. The animated wrist orientation is the one the pose was authored with, so it is
-        // restored rather than recomputed.
+        // The solve turns the forearm and the hand is its child, so the wrist would come along and
+        // pitch the fingers into the ground — measured 0.149 below the surface without this. The
+        // animated wrist is the authored one, so it is restored rather than recomputed.
         float weight = slideHandWeight * fade;
         var wrist = hand.rotation;
         SolveTwoBone(upper, lower, hand, desired, weight);
@@ -733,12 +797,9 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Two-bone IK. The elbow position is solved analytically and then each bone is simply aimed, which
-    /// avoids the sign and handedness traps of working in angles — the ragdoll's twist limits were a long
-    /// enough lesson in those.
-    ///
-    /// The bend plane is taken from wherever the animation already had the elbow, so the correction
-    /// lowers the hand without deciding for itself which way the joint folds.
+    /// Two-bone IK. The elbow is solved analytically and each bone then simply aimed, which avoids
+    /// the sign and handedness traps of working in angles. The bend plane comes from wherever the
+    /// animation already had the elbow, so the correction does not decide which way the joint folds.
     /// </summary>
     static void SolveTwoBone(Transform root, Transform mid, Transform tip, Vector3 target, float weight)
     {
@@ -783,8 +844,8 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// How far the closest bone sits above the ground plane, measured perpendicular to it. Negative if
-    /// something is already through the surface.
+    /// How far the closest bone sits above the ground plane, measured perpendicular to it. Negative
+    /// if something is already through the surface.
     /// </summary>
     float LowestDistanceAbovePlane(Vector3 groundPoint, Vector3 groundNormal)
     {
@@ -802,31 +863,53 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Surface normal and height under the feet. The controller is switched off for the cast for the
-    /// same reason BlockedFromStanding does it — otherwise the runner's own capsule is the first thing
-    /// hit — and the transforms are synced first because this project runs with autoSyncTransforms off.
+    /// Radius used by both self-excluded queries. Shaved off the controller's own so a shoulder
+    /// brushing a wall does not register.
+    /// </summary>
+    float QueryRadius => Mathf.Max(0.01f, cc.radius * 0.9f);
+
+    /// <summary>
+    /// Takes the runner's own capsule out of the physics scene and flushes pending transform writes,
+    /// so a query centred on the runner answers about the world rather than about themselves.
     ///
-    /// One probe serves both the pitch and the ground hug; LateUpdate calls it once and hands the
-    /// result to both.
+    /// Both are needed. Left enabled, the controller is the first thing every query hits. And this
+    /// project runs with autoSyncTransforms off, so without the sync a query issued straight after a
+    /// transform or collider change reads stale state — measured: CheckCapsule reported clear while
+    /// OverlapCapsule found the ceiling in the same volume.
+    ///
+    /// Returns the enabled state to hand back to <see cref="EndSelfExcludedQuery"/>. Always pair them;
+    /// returning early in between would leave the controller switched off.
+    /// </summary>
+    bool BeginSelfExcludedQuery()
+    {
+        bool wasEnabled = cc.enabled;
+        cc.enabled = false;
+        Physics.SyncTransforms();
+        return wasEnabled;
+    }
+
+    void EndSelfExcludedQuery(bool wasEnabled) => cc.enabled = wasEnabled;
+
+    /// <summary>
+    /// Surface normal and height under the feet, shared by the pitch and the ground hug — LateUpdate
+    /// casts once and hands the result to both.
     /// </summary>
     bool ProbeGround(out Vector3 normal, out Vector3 point)
     {
         normal = Vector3.up;
         point = transform.position;
 
-        bool wasEnabled = cc.enabled;
-        cc.enabled = false;
-        Physics.SyncTransforms();
+        bool wasEnabled = BeginSelfExcludedQuery();
 
-        float radius = Mathf.Max(0.01f, cc.radius * 0.9f);
-        // Starting a sphere cast from a radius up means the sphere begins clear of the floor, so a
-        // surface flush against the feet still registers as a hit rather than an initial overlap.
-        var origin = transform.position + Vector3.up * (radius + 0.05f);
+        float radius = QueryRadius;
+        // Starting a radius up means the sphere begins clear of the floor, so a surface flush against
+        // the feet registers as a hit rather than an initial overlap.
+        var origin = transform.position + Vector3.up * (radius + GroundLift);
         bool hit = Physics.SphereCast(origin, radius, Vector3.down, out var info,
-                                      radius + 0.05f + Mathf.Max(0.01f, slidePitchProbeDepth),
+                                      radius + GroundLift + Mathf.Max(0.01f, slidePitchProbeDepth),
                                       ~0, QueryTriggerInteraction.Ignore);
 
-        cc.enabled = wasEnabled;
+        EndSelfExcludedQuery(wasEnabled);
 
         if (!hit) return false;
         normal = info.normal;
@@ -850,7 +933,7 @@ public class PlayerController : MonoBehaviour
     /// <summary>
     /// Height of the animated pose above the capsule base, ignoring the arms.
     /// </summary>
-    public float MeasurePoseHeight()
+    float MeasurePoseHeight()
     {
         float feetY = transform.position.y;
         float top = 0f;
@@ -870,10 +953,9 @@ public class PlayerController : MonoBehaviour
     /// </summary>
     void LateUpdate()
     {
-        // The runner faces down the lane and never tips. Bones tumble freely — the roll
-        // leans the body well over to one side — but the capsule's own orientation is
-        // pinned here, after the Animator has written the pose, so no clip, no root
-        // motion and no stray write can leave the character rotated on Z or X.
+        // Bones tumble freely — the roll leans the body well over — but the capsule's orientation is
+        // pinned here, after the pose is written, so no clip, root motion or stray write can leave
+        // the runner rotated off the lane.
         if (transform.rotation != facing) transform.rotation = facing;
 
         if (!controlEnabled || animator == null || !animator.isHuman) return;
@@ -882,15 +964,14 @@ public class PlayerController : MonoBehaviour
 
         LevelRollPose();
 
-        // One ground probe, shared. Both the pitch and the ground hug want the surface underfoot, and
-        // casting twice a frame for the same answer would be waste.
+        // One probe, shared by the pitch and the hug — casting twice a frame for the same answer
+        // would be waste.
         var groundNormal = Vector3.up;
         var groundPoint = transform.position;
         bool hasGround = IsSliding && cc.isGrounded && ProbeGround(out groundNormal, out groundPoint);
 
-        // Both before the capsule is sized from the pose, so what gets measured is the body as it will
-        // actually be drawn. A nose-up slide is genuinely taller than a flat one, and a body sunk to meet
-        // the ground is genuinely lower.
+        // Both before the capsule is sized from the pose, so what gets measured is the body as it
+        // will be drawn: a nose-up slide is genuinely taller, a sunk body genuinely lower.
         ApplySlidePitch(hasGround, groundNormal);
         ApplySlideGroundHug(hasGround, groundPoint, groundNormal);
 
@@ -909,8 +990,8 @@ public class PlayerController : MonoBehaviour
         if (!controlEnabled) return;
 
         // The ragdoll switches the controller off and owns the body until the respawn. Moving a
-        // disabled CharacterController is an error per frame, not a silent no-op, so this is the
-        // backstop for any path that hands control back before the body is handed back.
+        // disabled CharacterController is an error per frame, so this backstops any path that hands
+        // control back before the body.
         if (!cc.enabled) return;
 
         if (cc.isGrounded) lastGroundedTime = Time.time;
@@ -919,11 +1000,10 @@ public class PlayerController : MonoBehaviour
 
         MaintainSlide();
 
-        // Fire an action asked for in the air the moment the feet are down. Each is consumed before
-        // its attempt, so a failure cannot leave it to retry on a later frame.
-        //
-        // Jump wins when both are held, and the slide is dropped rather than queued behind it —
-        // firing both would put the runner into a slide the instant they left the ground.
+        // Fire an action asked for in the air the moment the feet are down, consuming it before the
+        // attempt so a failure cannot retry on a later frame. Jump wins when both are held, and the
+        // slide is dropped rather than queued — firing both would slide the instant they left the
+        // ground.
         if (cc.isGrounded && !ActionsBlocked && Time.time - airborneJumpAt <= jumpLandingGrace)
         {
             airborneJumpAt = -999f;
@@ -947,20 +1027,19 @@ public class PlayerController : MonoBehaviour
 
         PinLane();
 
-        // The Jump state leaves on this rather than on clip time. Air time depends on what the
-        // runner lands on — hopping up onto a rooftop cuts it to a fraction of the clip — so a
-        // fixed exit time left Jump playing while the runner was already up and running.
+        // The Jump state leaves on this rather than on clip time: air time depends on what the runner
+        // lands on, so a fixed exit time left Jump playing while they were already up and running.
         //
-        // Set after the move, so isGrounded is this frame's. Rising counts as airborne even on
-        // the frame the jump starts, before the CharacterController reports leaving the floor,
-        // or Jump would hand straight back to Run on the frame it was entered.
-        if (animator != null) animator.SetBool("Grounded", cc.isGrounded && verticalVelocity <= 0f);
+        // Set after the move, so isGrounded is this frame's. Rising counts as airborne even before
+        // the controller reports leaving the floor, or Jump would hand straight back to Run on the
+        // frame it was entered.
+        if (animator != null) animator.SetBool(GroundedBool, cc.isGrounded && verticalVelocity <= 0f);
     }
 
     /// <summary>
-    /// Measures how long we have been off the ground and turns a long enough fall into a
-    /// roll on touchdown. A one-frame blip in CharacterController.isGrounded over a seam
-    /// reads as a fraction of a second of air, well under the threshold.
+    /// Measures time off the ground and turns a long enough fall into a roll on touchdown. A
+    /// one-frame isGrounded blip over a seam reads as a fraction of a second, well under the
+    /// threshold.
     /// </summary>
     void TrackAirborne()
     {
@@ -990,14 +1069,12 @@ public class PlayerController : MonoBehaviour
         if (!controlEnabled || ActionsBlocked) return;
         if (TryJump()) return;
 
-        // Rejected. Hold exactly one kind, the same kind the slide holds: a press made in the air,
-        // which is a player asking to jump the moment they land. That covers the touchdown frame,
-        // where cc.isGrounded can still read false because the input router and this script both
-        // run in Update in no guaranteed order — so whether the press lands depends on which ran
-        // first, and that is what makes it feel intermittent rather than broken.
+        // Rejected. Hold one kind only: a press made in the air, which is a player asking to jump the
+        // moment they land. That covers the touchdown frame, where isGrounded can still read false
+        // because the router and this script both run in Update in no guaranteed order.
         //
-        // A press rejected mid-slide is dropped outright, so it cannot resurface as an unasked-for
-        // hop when the slide expires.
+        // A press rejected mid-slide is dropped, so it cannot resurface as an unasked-for hop when
+        // the slide expires.
         if (!IsSliding) airborneJumpAt = Time.time;
     }
 
@@ -1006,14 +1083,9 @@ public class PlayerController : MonoBehaviour
         if (!controlEnabled || ActionsBlocked) return;
         if (TrySlide()) return;
 
-        // Rejected. Exactly one kind of rejection is worth holding: an airborne press, which is
-        // a player asking to slide the moment they land. Holding it covers the touchdown frame,
-        // where cc.isGrounded can still read false because the input router and this script both
-        // run in Update in no guaranteed order.
-        //
-        // A press made during a slide is dropped outright. Holding that was the old bug: it sat
-        // in the buffer through the whole slide and then fired as a second, unasked-for duck the
-        // instant the first expired.
+        // Rejected. Same rule as Jump: hold an airborne press to cover the touchdown frame, drop
+        // anything else. Holding a press made during a slide was the old bug — it sat in the buffer
+        // through the whole slide, then fired as a second, unasked-for duck the instant it expired.
         if (!IsSliding) airborneSlideAt = Time.time;
     }
 
@@ -1027,8 +1099,8 @@ public class PlayerController : MonoBehaviour
         if (IsSliding)
         {
             if (SlideProgress < slideJumpCancelAt) return false;
-            // Same reason MaintainSlide refuses to end a blocked slide: standing up to jump while
-            // something is directly overhead drives the capsule into it.
+            // Same reason MaintainSlide refuses to end a blocked slide: standing up while something
+            // is directly overhead drives the capsule into it.
             if (BlockedFromStanding()) return false;
             EndSlide();
         }
@@ -1036,26 +1108,22 @@ public class PlayerController : MonoBehaviour
         verticalVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
         lastGroundedTime = -999f;
         airborneJumpAt = -999f;   // spent, so leaving the ground cannot re-fire it on the way down
-        if (animator != null) animator.SetTrigger("Jump");
+        if (animator != null) animator.SetTrigger(JumpTrigger);
         return true;
     }
 
     /// <summary>
     /// Ends the slide, or keeps it going. Two independent reasons to keep going:
     ///
-    ///   Held. The player is still asking for it, up to slideHoldMaxMultiplier. This is the one
-    ///   players drive, and it is what makes long ducking stretches designable. Ignored entirely on the
+    ///   Held. The player is still asking, up to slideHoldMaxMultiplier. Ignored entirely on the
     ///   slide after a held long one — see slideHoldDisarmed.
     ///
     ///   Blocked. Standing up would put the capsule inside something, up to
-    ///   slideBlockedMaxMultiplier. Nothing to do with input — the runner keeps ducking under a long
-    ///   overhang whether or not they are still pressing, because the alternative is expanding into
+    ///   slideBlockedMaxMultiplier. Nothing to do with input — the alternative is expanding into
     ///   solid geometry.
     ///
-    /// Past every allowance and still blocked, the slide continues anyway and logs once. Forcing the
-    /// stand there would jam the capsule inside the obstacle, and a tunnel longer than the configured
-    /// allowance is a level-building mistake worth seeing in the console rather than silently
-    /// absorbing.
+    /// Past every allowance and still blocked, the slide continues anyway and logs once: a tunnel
+    /// that long is a level-building mistake worth seeing rather than silently absorbing.
     /// </summary>
     void MaintainSlide()
     {
@@ -1064,10 +1132,10 @@ public class PlayerController : MonoBehaviour
         float elapsed = Time.time - slideStartedAt;
         bool blocked = BlockedFromStanding();
 
-        // The button is ignored outright for the slide that follows a held long one. Disarming the
-        // input rather than shortening the allowance is what makes this cost nothing to reason about:
-        // with held false there is no stretch and no freeze, so this slide behaves exactly like an
-        // ordinary one whatever the player does with the button.
+        // The button is ignored outright for the slide after a held long one. Disarming the input
+        // rather than shortening the allowance is what makes this cost nothing to reason about: with
+        // held false there is no stretch and no freeze, so the slide behaves like an ordinary one
+        // whatever the player does with the button.
         bool held = !slideHoldDisarmed && inputRouter != null && inputRouter.SlideHeld;
 
         float allowance = slideDuration;
@@ -1076,8 +1144,7 @@ public class PlayerController : MonoBehaviour
         if (blocked)
             allowance = Mathf.Max(allowance, slideDuration * Mathf.Max(1f, slideBlockedMaxMultiplier));
 
-        // Blocked overrides the ceiling entirely — expanding into geometry is never the answer — but
-        // it says so once, because a tunnel that long is a level-building mistake.
+        // Blocked overrides the ceiling entirely, but says so once.
         bool overAllowance = elapsed >= allowance;
         bool stretch = (held || blocked) && (!overAllowance || blocked);
 
@@ -1096,13 +1163,12 @@ public class PlayerController : MonoBehaviour
         if (!freeze) slideClipTime += Time.deltaTime;
         SetSlideSpeed(freeze ? 0f : 1f);
 
-        // Freezing the pose is what does the prolonging — every frozen frame is a frame the clip does
-        // not advance, so the slide outlives its own animation. The second term catches a slide still
+        // Freezing the pose is what does the prolonging — a frozen frame is a frame the clip does not
+        // advance, so the slide outlives its own animation. The second term catches a slide still
         // being stretched past the point it would otherwise have ended.
         //
-        // Gated on `held`, so only a slide the player leaned on counts. A slide prolonged purely
-        // because the runner is under an overhang is the game keeping them safe, not greed, and
-        // charging for it would punish level geometry instead of behaviour.
+        // Gated on `held`: a slide prolonged purely by an overhang is the game keeping the runner
+        // safe, not greed, and charging for it would punish level geometry instead of behaviour.
         if (held && (freeze || (stretch && elapsed >= slideDuration))) slideProlongedByHold = true;
 
         if (stretch)
@@ -1126,75 +1192,64 @@ public class PlayerController : MonoBehaviour
 
     /// <summary>
     /// Scales the Slide state's playback. 0 freezes the pose, which is how a stretched slide holds
-    /// its shape instead of running the recovery early: the clip is 0.42s long and its exit used to
-    /// be unconditional, so without this a held slide showed the runner up and running while the
-    /// capsule was still crouched.
+    /// its shape instead of running the recovery early — the clip is 0.42s long, so without this a
+    /// held slide showed the runner up and running while the capsule was still crouched.
     /// </summary>
     void SetSlideSpeed(float speed)
     {
-        if (animator == null || !HasFloatParameter(SlideSpeedParameter)) return;
-        animator.SetFloat(SlideSpeedParameter, speed);
+        if (animator == null || !hasSlideSpeedParameter) return;
+        // Guarded on change: MaintainSlide calls this every frame of every slide, and the value is
+        // the same 1 for almost all of them.
+        if (Mathf.Approximately(speed, lastSlideSpeed)) return;
+        lastSlideSpeed = speed;
+        animator.SetFloat(SlideSpeedFloat, speed);
     }
 
     /// <summary>
-    /// Holds the Slide state open. Guarded like the float parameters: a controller that predates
-    /// Set Up Slide Hold has no such bool, and writing a missing one logs on every slide.
+    /// Holds the Slide state open. Guarded like the float parameters: a controller predating Set Up
+    /// Slide Hold has no such bool, and writing a missing one logs on every slide.
     /// </summary>
     void SetSlidingFlag(bool sliding)
     {
-        if (animator == null) return;
-        foreach (var parameter in animator.parameters)
-            if (parameter.type == AnimatorControllerParameterType.Bool && parameter.name == SlidingParameter)
-            {
-                animator.SetBool(SlidingParameter, sliding);
-                return;
-            }
+        if (animator == null || !hasSlidingParameter) return;
+        animator.SetBool(SlidingBool, sliding);
     }
 
     /// <summary>
     /// Whether expanding back to the standing capsule would intersect something.
     ///
-    /// The controller's own collider is switched off for the test — the probe capsule is the standing
-    /// one, which overlaps the crouched capsule by definition, so leaving it on would report blocked
-    /// every time. Teleport already uses the same disable-and-restore trick. The base is lifted clear
-    /// of the floor and the radius shaved, so the ground the runner is standing on is not mistaken
-    /// for a ceiling and a shoulder brushing a wall is not either.
+    /// The probe capsule is the standing one, which overlaps the crouched capsule by definition —
+    /// hence the self-excluded query. The base is lifted clear of the floor so the ground the runner
+    /// is standing on is not mistaken for a ceiling.
     /// </summary>
     bool BlockedFromStanding()
     {
         if (standHeight - cc.height <= 0.001f) return false;
 
-        bool wasEnabled = cc.enabled;
-        cc.enabled = false;
+        bool wasEnabled = BeginSelfExcludedQuery();
 
-        // This project runs with Physics.autoSyncTransforms off, so a query issued straight after a
-        // transform or collider change can read stale physics state — measured: the same volume
-        // reported clear from CheckCapsule while OverlapCapsule found the ceiling in it. Syncing
-        // first is what makes the answer trustworthy on the frame it is asked.
-        Physics.SyncTransforms();
-
-        float radius = Mathf.Max(0.01f, cc.radius * 0.9f);
-        float bottom = radius + 0.05f;
+        float radius = QueryRadius;
+        float bottom = radius + GroundLift;
         float top = Mathf.Max(bottom, standHeight - radius);
         var p0 = transform.position + Vector3.up * bottom;
         var p1 = transform.position + Vector3.up * top;
         bool blocked = Physics.CheckCapsule(p0, p1, radius, ~0, QueryTriggerInteraction.Ignore);
 
-        cc.enabled = wasEnabled;
+        EndSelfExcludedQuery(wasEnabled);
         return blocked;
     }
 
     bool TrySlide()
     {
-        // Real ground contact only. Coyote time is a jump forgiveness window; using it here
-        // would let the runner duck in mid-air.
+        // Real ground contact only. Coyote time is a jump forgiveness window; using it here would let
+        // the runner duck in mid-air.
         //
-        // Returning false while already sliding is what makes a second tap a no-op rather
-        // than a queued second slide — the trigger is never set, so nothing can replay it.
+        // Returning false while already sliding is what makes a second tap a no-op rather than a
+        // queued second slide — the trigger is never set, so nothing can replay it.
         if (!cc.isGrounded || IsSliding) return false;
 
         // Standing out the recovery from the last long slide. Refused rather than queued, so holding
-        // the button through the recovery does not buy a slide the instant it expires.
+        // the button through it does not buy a slide the instant it expires.
         if (IsSlideRecovering) return false;
 
         slideStartedAt = Time.time;
@@ -1206,30 +1261,29 @@ public class PlayerController : MonoBehaviour
         slideEndsAt = Time.time + slideDuration;
         cc.height = standHeight * slideHeightFraction;
         cc.center = new Vector3(standCenter.x, cc.height * 0.5f, standCenter.z);
-        if (animator != null) animator.SetTrigger("Slide");
+        if (animator != null) animator.SetTrigger(SlideTrigger);
         return true;
     }
 
     /// <summary>
     /// Stands the runner back up and settles what the slide they are leaving costs them.
     ///
-    /// A slide the player held long earns two things: the recovery period, and a disarmed button for
-    /// whatever they slide next. An ordinary slide clears the disarm, which is what makes the pattern
-    /// long, normal, long rather than long, long, long — a long slide has to be paid for with a plain
-    /// one before another is available.
+    /// A held long slide earns the recovery period and a disarmed button for whatever they slide
+    /// next. An ordinary slide clears the disarm, which makes the pattern long, normal, long rather
+    /// than long, long, long.
     /// </summary>
     void EndSlide()
     {
-        // Guarded on actually having been sliding. EndSlide is also called when nothing is sliding at
-        // all — control being taken away, a roll starting, a respawn — and a flag left over from an
-        // earlier slide would otherwise charge a recovery for nothing.
+        // Guarded on actually having been sliding. EndSlide is also called when nothing is — control
+        // being taken away, a roll starting, a respawn — and a leftover flag would charge a recovery
+        // for nothing.
         if (slideEndsAt >= 0f)
         {
             if (slideProlongedByHold && slideRecoveryTime > 0f)
                 slideRecoveryUntil = Time.time + slideRecoveryTime;
 
-            // Only a held long slide disarms the button. An ordinary slide — including one prolonged
-            // purely by an overhang, which the player did not ask for — arms it again.
+            // Only a held long slide disarms the button. An ordinary one — including a slide
+            // prolonged purely by an overhang, which the player did not ask for — arms it again.
             slideHoldDisarmed = slideProlongedByHold;
         }
 
@@ -1251,15 +1305,24 @@ public class PlayerController : MonoBehaviour
     {
         if (!controlEnabled) return;
 
-        // A canopy launches the runner off its top face. Tested first, but only the booster itself
-        // decides whether this contact counts as the top — a hit on its front edge falls straight
-        // through to the wall rules below and kills, exactly like any other obstacle.
-        // GetComponentInParent, so the collider is free to be a child of the prefab root.
-        var canopy = hit.collider.GetComponentInParent<CanopyBooster>();
-        if (canopy != null && canopy.TryConsumeBounce(hit.normal))
+        // A canopy launches the runner off its top face, but only the booster decides whether this
+        // contact counts as the top — a hit on its front edge falls through to the wall rules below
+        // and kills, like any other obstacle. GetComponentInParent, so the collider may be a child.
+        //
+        // Gated on an upward-facing contact first. This callback fires for every wall, roof and road
+        // segment touched, several times per frame in dense geometry, and GetComponentInParent walks
+        // the whole parent chain each time. The booster's own topNormalThreshold is [Range(0, 1)], so
+        // a downward normal can never bounce and the lookup would always have been wasted. It cannot
+        // simply be moved below the wall test instead — a canopy top is not a wall, so that test
+        // returns first and the bounce would never fire.
+        if (hit.normal.y > 0f)
         {
-            Bounce(canopy.BounceHeight);
-            return;
+            var canopy = hit.collider.GetComponentInParent<CanopyBooster>();
+            if (canopy != null && canopy.TryConsumeBounce(hit.normal))
+            {
+                Bounce(canopy.BounceHeight);
+                return;
+            }
         }
 
         // Roofs, floors and ceilings all fail this test — only walls pass.
@@ -1270,8 +1333,8 @@ public class PlayerController : MonoBehaviour
         float surfaceTop = hit.collider.bounds.max.y;
         if (surfaceTop - feetY <= cc.stepOffset + ledgeTolerance) return;
 
-        // The normal goes with it: it points out of the wall, which is the direction the runner
-        // should be thrown, and only this method knows it.
+        // The normal goes with it: it points out of the wall, which is the direction to throw the
+        // body, and only this method knows it.
         if (RunManager.Instance != null) RunManager.Instance.Kill(hit.normal);
     }
 
@@ -1281,8 +1344,8 @@ public class PlayerController : MonoBehaviour
     /// </summary>
     public void Die(Vector3 impactNormal)
     {
-        // Read before control is dropped — EnableControl(false) zeroes verticalVelocity, and the
-        // fall the runner was in the middle of is half of what makes the collapse read right.
+        // Read before control is dropped — EnableControl(false) zeroes verticalVelocity, and the fall
+        // the runner was in is half of what makes the collapse read right.
         var velocity = CurrentVelocity;
 
         EnableControl(false);
@@ -1300,46 +1363,37 @@ public class PlayerController : MonoBehaviour
     }
 
     /// <summary>
-    /// Launches the runner off a canopy. Not a jump: it asks for no ground under the feet and does
-    /// not consult ActionsBlocked, because the canopy is doing the work, not the player. Height is
-    /// an apex above the point of contact, converted through the same gravity the jump uses so the
-    /// two stay comparable.
+    /// Launches the runner off a canopy. Not a jump: it asks for no ground underfoot and ignores
+    /// ActionsBlocked, because the canopy is doing the work. Height is an apex above the contact
+    /// point, converted through the same gravity the jump uses so the two stay comparable.
     /// </summary>
-    public void Bounce(float height)
+    void Bounce(float height)
     {
         EndSlide();
         verticalVelocity = Mathf.Sqrt(2f * Mathf.Max(0f, height) * -gravity);
 
         // No coyote hop off the launch, and no buffered press cashing itself in at the top of it.
         lastGroundedTime = -999f;
-        airborneJumpAt = -999f;
-        airborneSlideAt = -999f;
+        ClearBufferedInput();
 
-        // The canopy absorbs the fall, so the air-time clock restarts here. Without this, a long
-        // drop onto a canopy would still be carrying that fall when the runner next touches down
-        // and would fire a landing roll the canopy has already cancelled.
+        // The canopy absorbs the fall, so the air-time clock restarts here. Without this a long drop
+        // onto a canopy would still be carrying that fall at the next touchdown and would fire a
+        // landing roll the canopy has already cancelled.
         leftGroundAt = Time.time;
 
-        if (animator != null) animator.SetTrigger("Jump");
+        if (animator != null) animator.SetTrigger(JumpTrigger);
     }
 
     /// <summary>Hard reposition used on respawn — CharacterController ignores transform writes while enabled.</summary>
     public void Teleport(Vector3 position)
     {
         EndSlide();
-        slideRecoveryUntil = -1f;   // a fresh start, not the tail of the slide they died in
-        slideHoldDisarmed = false;
-        slidePitch = 0f;           // the checkpoint is flat ground, whatever they died on was not
-        slidePitchVelocity = 0f;
-        slideHugDrop = 0f;
-        slideHugVelocity = 0f;
-        slideHandWeight = 0f;
-        slideHandWeightVelocity = 0f;
-        airborneSlideAt = -999f;   // a press from before the death must not fire on respawn
-        airborneJumpAt = -999f;
-        // Dying in mid-air used to leave leftGroundAt set, so TrackAirborne measured the fall as
-        // running from before the death and fired a landing roll on the respawn's first grounded
-        // frame. The respawn is a fresh start, not the end of a fall.
+        ClearSlideDebt();        // a fresh start, not the tail of the slide they died in
+        ResetSlideCosmetics();   // the checkpoint is flat ground, whatever they died on was not
+        ClearBufferedInput();    // a press from before the death must not fire on respawn
+        CancelRoll();            // and they must not arrive mid-tumble, unable to act
+        // Dying in mid-air left leftGroundAt set, so TrackAirborne measured the fall as running from
+        // before the death and fired a landing roll on the respawn's first grounded frame.
         leftGroundAt = -1f;
         verticalVelocity = 0f;
         cc.enabled = false;

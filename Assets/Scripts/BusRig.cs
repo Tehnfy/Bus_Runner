@@ -35,8 +35,6 @@ public class BusRig : MonoBehaviour
     float baseOffsetX;
     bool following;
 
-    public bool Following => following;
-
     void Awake()
     {
         if (followTarget == null)

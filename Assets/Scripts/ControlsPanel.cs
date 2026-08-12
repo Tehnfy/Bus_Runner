@@ -156,12 +156,15 @@ public class ControlsPanel : MonoBehaviour
 
     void BuildRows()
     {
-        built = true;
+        // Set only once the build can actually happen. Latching it first meant a misconfigured panel
+        // logged once and then reported itself built forever, so wiring `rows` up afterwards never
+        // took effect.
         if (rows == null)
         {
             Debug.LogError("[ControlsPanel] No rows container — run Bus Runner > Set Up Start Menu.");
             return;
         }
+        built = true;
 
         for (int i = rows.childCount - 1; i >= 0; i--) Destroy(rows.GetChild(i).gameObject);
 
@@ -225,16 +228,10 @@ public class ControlsPanel : MonoBehaviour
 
     Text MakeLabel(Transform parent, string name, string content, TextAnchor anchor)
     {
-        var go = new GameObject(name, typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-        var rect = (RectTransform)go.transform;
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
+        var go = UiRect.Stretch(parent, name);
 
         var text = go.AddComponent<Text>();
-        text.font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.font = UiRect.ResolveFont(font, "ControlsPanel");
         text.fontSize = RowFontSize;
         text.alignment = anchor;
         text.color = Color.white;

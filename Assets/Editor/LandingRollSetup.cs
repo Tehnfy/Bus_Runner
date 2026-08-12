@@ -23,9 +23,10 @@ static class LandingRollSetup
 {
     const string RollFbx = "Assets/Animations/Quick Roll To Run.fbx";
 
-    // Frames kept from the take. Negative first frame means "use the whole clip": unlike
-    // "Falling To Roll", which opened with a descent that had to be cut, this take is a roll that
-    // runs out of it, so nothing is trimmed until measurement says otherwise.
+    // Frames kept from the take. Both negative means "use the whole clip", which is the case for
+    // "Quick Roll To Run" — it starts on the ground, so there is no descent to cut. The trim branch
+    // below is therefore unreachable today; it is kept for the next take, which may need it the way
+    // "Falling To Roll" did.
     const float LandingFrame = -1f;
     const float LastFrame = -1f;
     const string CharacterFbx = "Assets/Models/Ch36_nonPBR.fbx";

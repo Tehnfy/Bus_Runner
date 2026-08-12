@@ -62,13 +62,7 @@ public class ScreenFader : MonoBehaviour
         // resolution without one.
         gameObject.AddComponent<GraphicRaycaster>();
 
-        var go = new GameObject("Curtain", typeof(RectTransform));
-        go.transform.SetParent(transform, false);
-        var rect = (RectTransform)go.transform;
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
+        var go = UiRect.Stretch(transform, "Curtain");
 
         curtain = go.AddComponent<Image>();
         curtain.color = Color.black;
@@ -86,10 +80,6 @@ public class ScreenFader : MonoBehaviour
     {
         Restart(LoadBehindCurtain(sceneName, fadeOutDuration, blackHold, fadeInDuration));
     }
-
-    public void FadeOut(float duration) => Restart(FadeRoutine(1f, duration));
-
-    public void FadeIn(float duration) => Restart(FadeRoutine(0f, duration));
 
     IEnumerator LoadBehindCurtain(string sceneName, float fadeOutDuration, float blackHold, float fadeInDuration)
     {

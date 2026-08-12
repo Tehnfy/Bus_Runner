@@ -91,7 +91,7 @@ static class FinishSequenceSetup
             touchUI);
 
         var runManager = runManagerGo.GetComponent<RunManager>();
-        if (runManager != null) SetRef(runManager, "finishSequence", finishSequence);
+        if (runManager != null) UiBuild.SetRef(runManager, "finishSequence", finishSequence);
 
         Undo.CollapseUndoOperations(group);
         EditorSceneManager.MarkSceneDirty(scene);
@@ -102,7 +102,7 @@ static class FinishSequenceSetup
     {
         var rig = introStaging.GetComponent<BusRig>();
         if (rig == null) rig = Undo.AddComponent<BusRig>(introStaging);
-        SetRef(rig, "followTarget", player);
+        UiBuild.SetRef(rig, "followTarget", player);
         return rig;
     }
 
@@ -190,38 +190,19 @@ static class FinishSequenceSetup
         var seq = go.GetComponent<FinishSequence>();
         if (seq == null) seq = Undo.AddComponent<FinishSequence>(go);
 
-        SetRef(seq, "gameCam", gameCam);
-        SetRef(seq, "approachCam", approachCam);
-        SetRef(seq, "outroCam", outroCam);
-        SetRef(seq, "brain", brain);
-        SetRef(seq, "player", player);
-        SetRef(seq, "busRig", busRig);
-        SetRef(seq, "touchUI", touchUI);
+        UiBuild.SetRef(seq, "gameCam", gameCam);
+        UiBuild.SetRef(seq, "approachCam", approachCam);
+        UiBuild.SetRef(seq, "outroCam", outroCam);
+        UiBuild.SetRef(seq, "brain", brain);
+        UiBuild.SetRef(seq, "player", player);
+        UiBuild.SetRef(seq, "busRig", busRig);
+        UiBuild.SetRef(seq, "touchUI", touchUI);
         return seq;
     }
 
-    static GameObject Find(string name)
-    {
-        foreach (var root in EditorSceneManager.GetActiveScene().GetRootGameObjects())
-        {
-            if (root.name == name) return root;
-            var child = root.transform.Find(name);
-            if (child != null) return child.gameObject;
-        }
-        return null;
-    }
-
-    /// <summary>Writes a private [SerializeField] object reference the way the inspector would.</summary>
-    static void SetRef(Object target, string field, Object value)
-    {
-        var so = new SerializedObject(target);
-        var prop = so.FindProperty(field);
-        if (prop == null)
-        {
-            Debug.LogWarning($"[FinishSequenceSetup] {target.GetType().Name} has no serialized field '{field}'.");
-            return;
-        }
-        prop.objectReferenceValue = value;
-        so.ApplyModifiedProperties();
-    }
+    /// <summary>
+    /// Scene lookup for this command. Always searches one level of children as well — the trigger
+    /// and its marker live under Lane, and the shot cameras under IntroStaging.
+    /// </summary>
+    static GameObject Find(string name) => UiBuild.FindRoot(name, includeChildren: true);
 }

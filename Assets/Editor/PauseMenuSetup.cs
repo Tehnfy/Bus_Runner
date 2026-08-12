@@ -33,7 +33,7 @@ static class PauseMenuSetup
     [MenuItem("Bus Runner/Set Up Pause Menu")]
     static void Run()
     {
-        if (!OpenTargetScene()) return;
+        if (!UiBuild.OpenTargetScene(ScenePath, "PauseMenuSetup")) return;
 
         Undo.SetCurrentGroupName("Set Up Pause Menu");
         int group = Undo.GetCurrentGroup();
@@ -93,7 +93,7 @@ static class PauseMenuSetup
 
     static GameObject EnsureCanvas()
     {
-        var existing = FindRoot(CanvasName);
+        var existing = UiBuild.FindRoot(CanvasName);
         var go = existing != null ? existing : new GameObject(CanvasName);
         if (existing == null) Undo.RegisterCreatedObjectUndo(go, "Create " + CanvasName);
 
@@ -116,30 +116,4 @@ static class PauseMenuSetup
         return go;
     }
 
-    /// <summary>
-    /// Opens Level_1.unity if it is not already the active scene. Refuses to do it over
-    /// unsaved work rather than discarding whatever is open.
-    /// </summary>
-    static bool OpenTargetScene()
-    {
-        var active = EditorSceneManager.GetActiveScene();
-        if (active.path == ScenePath) return true;
-
-        if (active.isDirty)
-        {
-            Debug.LogError($"[PauseMenuSetup] '{active.name}' has unsaved changes. Save it, then run this " +
-                           $"again — this command needs to open {ScenePath}.");
-            return false;
-        }
-
-        EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-        return EditorSceneManager.GetActiveScene().path == ScenePath;
-    }
-
-    static GameObject FindRoot(string name)
-    {
-        foreach (var root in EditorSceneManager.GetActiveScene().GetRootGameObjects())
-            if (root.name == name) return root;
-        return null;
-    }
 }

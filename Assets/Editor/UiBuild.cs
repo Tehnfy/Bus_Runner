@@ -1,12 +1,14 @@
 using UnityEditor;
 using UnityEditor.Events;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
 /// <summary>
-/// Shared builders for the menu setup commands. Everything here is find-or-create, so
-/// re-running a setup reconfigures what it made last time instead of stacking duplicates.
+/// Shared helpers for the Bus Runner setup commands — scene lookup, serialized-field wiring, and
+/// UI construction. Everything here is find-or-create, so re-running a setup reconfigures what it
+/// made last time instead of stacking duplicates.
 ///
 /// Legacy UI (UnityEngine.UI.Text / Image / Button) on purpose — that is what the
 /// hand-placed menu and touch buttons already use, and mixing in TextMeshPro would mean
@@ -14,6 +16,45 @@ using UnityEngine.UI;
 /// </summary>
 static class UiBuild
 {
+    /// <summary>
+    /// Finds a GameObject in the active scene by name. Roots only by default; with
+    /// <paramref name="includeChildren"/> it also checks each root's immediate children, which is
+    /// what the finish-sequence wiring needs to reach objects parented under Lane and IntroStaging.
+    /// </summary>
+    public static GameObject FindRoot(string name, bool includeChildren = false)
+    {
+        foreach (var root in EditorSceneManager.GetActiveScene().GetRootGameObjects())
+        {
+            if (root.name == name) return root;
+            if (!includeChildren) continue;
+
+            var child = root.transform.Find(name);
+            if (child != null) return child.gameObject;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="scenePath"/> the active scene, opening it if it is not already.
+    /// Refuses to do that over unsaved work — a silent discard here would cost whatever is open in
+    /// the editor. Returns false if the caller should abort.
+    /// </summary>
+    public static bool OpenTargetScene(string scenePath, string logPrefix)
+    {
+        var active = EditorSceneManager.GetActiveScene();
+        if (active.path == scenePath) return true;
+
+        if (active.isDirty)
+        {
+            Debug.LogError($"[{logPrefix}] '{active.name}' has unsaved changes. Save it, then run this " +
+                           $"again — this command needs to open {scenePath}.");
+            return false;
+        }
+
+        EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+        return EditorSceneManager.GetActiveScene().path == scenePath;
+    }
+
     /// <summary>
     /// The font legacy Text needs to draw anything at all. Unity renamed Arial.ttf to
     /// LegacyRuntime.ttf, so both names are tried.
@@ -100,6 +141,20 @@ static class UiBuild
         for (int i = button.onClick.GetPersistentEventCount() - 1; i >= 0; i--)
             UnityEventTools.RemovePersistentListener(button.onClick, i);
         UnityEventTools.AddVoidPersistentListener(button.onClick, call);
+    }
+
+    /// <summary>Writes a private [SerializeField] enum the way the inspector would.</summary>
+    public static void SetEnum(Object target, string field, int value)
+    {
+        var so = new SerializedObject(target);
+        var prop = so.FindProperty(field);
+        if (prop == null)
+        {
+            Debug.LogWarning($"[UiBuild] {target.GetType().Name} has no serialized field '{field}'.");
+            return;
+        }
+        prop.enumValueIndex = value;
+        so.ApplyModifiedProperties();
     }
 
     /// <summary>Writes a private [SerializeField] object reference the way the inspector would.</summary>

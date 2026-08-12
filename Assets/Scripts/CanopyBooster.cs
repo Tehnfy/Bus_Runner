@@ -24,7 +24,11 @@ public class CanopyBooster : MonoBehaviour
 
     [Tooltip("Repeat contacts inside this window are ignored. CharacterController reports a surface " +
              "several times across one touchdown, and without this each report would stack another " +
-             "launch on top of the last.")]
+             "launch on top of the last.\n\n" +
+             "Absolute time, and nothing resets it on respawn — so it must stay well under " +
+             "RunManager.respawnDelay (1.5s). At that margin a death and respawn always outlast the " +
+             "window, and the respawn lands at a checkpoint far from any canopy anyway. Raise this " +
+             "above the respawn delay and dying on a canopy would swallow the next bounce.")]
     [SerializeField] float retriggerDelay = 0.25f;
 
     float nextBounceAt;

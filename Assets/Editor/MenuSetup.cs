@@ -25,6 +25,11 @@ static class MenuSetup
     static readonly Color BackColor = new Color(0.32f, 0.34f, 0.38f, 0.9f);
     static readonly Color MutedText = new Color(0.72f, 0.75f, 0.8f, 1f);
     static readonly Color WarnText = new Color(0.95f, 0.75f, 0.25f, 1f);
+    // Set apart from the blue action buttons, so the shop reads as its own thing rather than
+    // another way into a level.
+    static readonly Color ShopColor = new Color(0.55f, 0.32f, 0.78f, 0.92f);
+
+    const string CoinSettingsPath = "Assets/Settings/CoinSettings.asset";
 
     // ControlsPanel overwrites the window colour as soon as a rebind starts; these are what the
     // scene shows at rest.
@@ -40,10 +45,10 @@ static class MenuSetup
     [MenuItem("Bus Runner/Set Up Start Menu")]
     static void Run()
     {
-        if (!OpenTargetScene()) return;
+        if (!UiBuild.OpenTargetScene(ScenePath, "MenuSetup")) return;
 
-        var canvas = FindRoot(CanvasName);
-        var controllerGo = FindRoot("MenuController");
+        var canvas = UiBuild.FindRoot(CanvasName);
+        var controllerGo = UiBuild.FindRoot("MenuController");
         if (canvas == null || controllerGo == null)
         {
             Debug.LogError($"[MenuSetup] {ScenePath} is missing '{CanvasName}' or 'MenuController'.");
@@ -64,11 +69,13 @@ static class MenuSetup
         var levelSelect = BuildLevelSelectPanel(canvas.transform, controller, out var levelList);
         var options = BuildOptionsPanel(canvas.transform, controller);
         var controls = BuildControlsPanel(canvas.transform, controller);
+        var shop = BuildShopPanel(canvas.transform, controller);
 
         UiBuild.SetRef(controller, "mainPanel", main);
         UiBuild.SetRef(controller, "levelSelectPanel", levelSelect);
         UiBuild.SetRef(controller, "optionsPanel", options);
         UiBuild.SetRef(controller, "controlsPanel", controls);
+        UiBuild.SetRef(controller, "shopPanel", shop);
         UiBuild.SetRef(controller, "levelList", levelList);
         UiBuild.SetRef(controller, "levelButtonFont", UiBuild.BuiltinFont());
 
@@ -77,6 +84,7 @@ static class MenuSetup
         levelSelect.SetActive(false);
         options.SetActive(false);
         controls.SetActive(false);
+        shop.SetActive(false);
 
         Undo.CollapseUndoOperations(group);
         var scene = EditorSceneManager.GetActiveScene();
@@ -99,16 +107,63 @@ static class MenuSetup
         var playButton = play != null
             ? Configure(play.gameObject, new Vector2(0.35f, 0.38f), new Vector2(0.65f, 0.50f))
             : UiBuild.MakeButton(panel.transform, "PlayButton", "PLAY",
-                new Vector2(0.35f, 0.38f), new Vector2(0.65f, 0.50f), ActionColor, 56);
+                new Vector2(0.35f, 0.42f), new Vector2(0.65f, 0.54f), ActionColor, 56);
 
+        var shopButton = UiBuild.MakeButton(panel.transform, "ShopButton", "SHOP",
+            new Vector2(0.35f, 0.30f), new Vector2(0.65f, 0.40f), ShopColor, 44);
         var levelSelectButton = UiBuild.MakeButton(panel.transform, "LevelSelectButton", "LEVEL SELECT",
-            new Vector2(0.35f, 0.24f), new Vector2(0.65f, 0.36f), ActionColor, 44);
+            new Vector2(0.35f, 0.18f), new Vector2(0.65f, 0.28f), ActionColor, 44);
         var optionsButton = UiBuild.MakeButton(panel.transform, "OptionsButton", "OPTIONS",
-            new Vector2(0.35f, 0.10f), new Vector2(0.65f, 0.22f), ActionColor, 44);
+            new Vector2(0.35f, 0.06f), new Vector2(0.65f, 0.16f), ActionColor, 44);
 
         UiBuild.Bind(playButton, controller.PlayLevel);
+        UiBuild.Bind(shopButton, controller.ShowShop);
         UiBuild.Bind(levelSelectButton, controller.ShowLevelSelect);
         UiBuild.Bind(optionsButton, controller.ShowOptions);
+        return panel;
+    }
+
+    /// <summary>
+    /// Unlocks live here once they exist. Until then the panel carries the disclaimer and the coin
+    /// balances, so the currency the player is accumulating is at least visible somewhere.
+    ///
+    /// The balances are a CoinCounter rather than hand-built labels, which is the same component the
+    /// in-run HUD uses — a fourth coin type would appear in both without touching either.
+    /// </summary>
+    static GameObject BuildShopPanel(Transform canvas, MenuController controller)
+    {
+        var panel = UiBuild.Child(canvas, "ShopPanel");
+        UiBuild.Place(panel, Vector2.zero, Vector2.one);
+
+        UiBuild.Label(panel.transform, "Header", "SHOP", HeaderMin, HeaderMax, 56);
+        UiBuild.Label(panel.transform, "Notice", "IN DEVELOPMENT",
+            new Vector2(0.15f, 0.42f), new Vector2(0.85f, 0.49f), 40, WarnText);
+        UiBuild.Label(panel.transform, "Blurb", "Unlocks are not built yet. Coins you collect are " +
+                      "being saved and will spend here.",
+            new Vector2(0.12f, 0.34f), new Vector2(0.88f, 0.41f), 28, MutedText);
+
+        // Balances, stacked by a layout group so the row count follows the coin types.
+        var balances = UiBuild.Child(panel.transform, "Balances");
+        UiBuild.Place(balances, new Vector2(0.36f, 0.20f), new Vector2(0.64f, 0.33f));
+
+        var layout = balances.GetComponent<VerticalLayoutGroup>();
+        if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(balances);
+        layout.childControlWidth = true;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+        layout.spacing = 6f;
+
+        var counter = balances.GetComponent<CoinCounter>();
+        if (counter == null) counter = Undo.AddComponent<CoinCounter>(balances);
+        UiBuild.SetRef(counter, "rows", balances.GetComponent<RectTransform>());
+        UiBuild.SetRef(counter, "settings", AssetDatabase.LoadAssetAtPath<CoinSettings>(CoinSettingsPath));
+        UiBuild.SetRef(counter, "font", UiBuild.BuiltinFont());
+        // Lifetime totals here — this is the pile unlocks will spend from.
+        UiBuild.SetEnum(counter, "readout", (int)CoinCounter.Readout.Total);
+
+        var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK", BackMin, BackMax, BackColor, 40);
+        UiBuild.Bind(back, controller.ShowMain);
         return panel;
     }
 
@@ -255,30 +310,4 @@ static class MenuSetup
         return button;
     }
 
-    /// <summary>
-    /// Opens Menu.unity if it is not already the active scene. Refuses to do it over unsaved
-    /// work — a silent discard here would cost whatever is open in the editor.
-    /// </summary>
-    static bool OpenTargetScene()
-    {
-        var active = EditorSceneManager.GetActiveScene();
-        if (active.path == ScenePath) return true;
-
-        if (active.isDirty)
-        {
-            Debug.LogError($"[MenuSetup] '{active.name}' has unsaved changes. Save it, then run this again " +
-                           $"— this command needs to open {ScenePath}.");
-            return false;
-        }
-
-        EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
-        return EditorSceneManager.GetActiveScene().path == ScenePath;
-    }
-
-    static GameObject FindRoot(string name)
-    {
-        foreach (var root in EditorSceneManager.GetActiveScene().GetRootGameObjects())
-            if (root.name == name) return root;
-        return null;
-    }
 }
