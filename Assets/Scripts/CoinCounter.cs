@@ -1,4 +1,5 @@
 using System.Collections;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -30,7 +31,7 @@ public class CoinCounter : MonoBehaviour
     [Tooltip("Supplies each type's colour, so the readout matches the coin the player picked up.")]
     [SerializeField] CoinSettings settings;
 
-    [SerializeField] Font font;
+    [SerializeField] TMP_FontAsset font;
     [SerializeField] int fontSize = 34;
     [SerializeField] float rowHeight = 44f;
 
@@ -54,7 +55,7 @@ public class CoinCounter : MonoBehaviour
              "Wrong for the Shop, where a zero balance is information.")]
     [SerializeField] bool hideUntilEarned;
 
-    Text[] values;
+    TMP_Text[] values;
     RectTransform[] rects;
 
     // What each row currently displays, so a change can be told from a redraw. The event fires for
@@ -108,7 +109,7 @@ public class CoinCounter : MonoBehaviour
         for (int i = rows.childCount - 1; i >= 0; i--) Destroy(rows.GetChild(i).gameObject);
 
         var types = CoinWallet.Types;
-        values = new Text[types.Length];
+        values = new TMP_Text[types.Length];
         rects = new RectTransform[types.Length];
         shown = new int[types.Length];
         pulses = new Coroutine[types.Length];
@@ -128,21 +129,21 @@ public class CoinCounter : MonoBehaviour
             rect.sizeDelta = new Vector2(rect.sizeDelta.x, rowHeight);
 
             // Honoured if someone does turn childControlHeight on, so the row does not then collapse
-            // to whatever the group decides a Text wants.
+            // to whatever the group decides a label wants.
             var element = go.AddComponent<LayoutElement>();
             element.preferredHeight = rowHeight;
             element.minHeight = rowHeight;
 
-            var text = go.AddComponent<Text>();
+            var text = go.AddComponent<TextMeshProUGUI>();
             text.font = UiRect.ResolveFont(font, "CoinCounter");
             text.fontSize = fontSize;
-            text.alignment = alignment;
+            text.alignment = UiRect.Align(alignment);
             text.color = ColorFor(type);
 
-            // One line, drawn even if the row is a few pixels short. The default Wrap plus Truncate is
-            // how a legacy Text ends up rendering nothing without saying so.
-            text.horizontalOverflow = HorizontalWrapMode.Overflow;
-            text.verticalOverflow = VerticalWrapMode.Overflow;
+            // One line, drawn even if the row is a few pixels short. TMP's default Truncate is how a
+            // row that does not quite fit ends up rendering nothing without saying so.
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Overflow;
 
             int amount = Amount(type);
             text.text = Format(type, amount);

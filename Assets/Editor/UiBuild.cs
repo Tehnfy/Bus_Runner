@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEditor;
 using UnityEditor.Events;
 using UnityEditor.SceneManagement;
@@ -10,9 +11,10 @@ using UnityEngine.UI;
 /// UI construction. Everything here is find-or-create, so re-running a setup reconfigures what it
 /// made last time instead of stacking duplicates.
 ///
-/// Legacy UI (UnityEngine.UI.Text / Image / Button) on purpose — that is what the
-/// hand-placed menu and touch buttons already use, and mixing in TextMeshPro would mean
-/// two font pipelines for four screens of UI.
+/// Image and Button are UnityEngine.UI; captions are TextMeshPro. Legacy Text is what this project
+/// started on and it was replaced wholesale: it offers almost nothing to tune from the inspector,
+/// and its default Wrap + Truncate means a caption that does not fit draws nothing at all rather
+/// than overflowing where you can see it.
 /// </summary>
 static class UiBuild
 {
@@ -56,12 +58,10 @@ static class UiBuild
     }
 
     /// <summary>
-    /// The font legacy Text needs to draw anything at all. Unity renamed Arial.ttf to
-    /// LegacyRuntime.ttf, so both names are tried.
+    /// The font asset TMP needs to draw anything at all. Shares UiRect's resolver so the editor and
+    /// runtime paths can never disagree about which font a generated label gets.
     /// </summary>
-    public static Font BuiltinFont() =>
-        Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf")
-        ?? Resources.GetBuiltinResource<Font>("Arial.ttf");
+    public static TMP_FontAsset BuiltinFont() => UiRect.ResolveFont(null, "UiBuild");
 
     /// <summary>Find-or-create a child by name, always carrying a RectTransform.</summary>
     public static GameObject Child(Transform parent, string name)
@@ -90,22 +90,34 @@ static class UiBuild
         return rect;
     }
 
-    public static Text Label(
+    /// <summary>
+    /// Find-or-create a TextMeshProUGUI caption, configured whole.
+    ///
+    /// A legacy Text already on the object is removed first. Unity allows only one Graphic per
+    /// GameObject, so AddComponent would otherwise return null and the next line would throw — which
+    /// is exactly how this command broke once the menu's captions were converted by hand. Removing
+    /// rather than refusing is what lets a setup command be re-run over a half-migrated scene.
+    /// </summary>
+    public static TMP_Text Label(
         Transform parent, string name, string content, Vector2 anchorMin, Vector2 anchorMax,
         int fontSize, Color? color = null, TextAnchor anchor = TextAnchor.MiddleCenter)
     {
         var go = Child(parent, name);
         Place(go, anchorMin, anchorMax);
 
-        var text = go.GetComponent<Text>();
-        if (text == null) text = Undo.AddComponent<Text>(go);
+        var legacy = go.GetComponent<Text>();
+        if (legacy != null) Undo.DestroyObjectImmediate(legacy);
+
+        var text = go.GetComponent<TextMeshProUGUI>();
+        if (text == null) text = Undo.AddComponent<TextMeshProUGUI>(go);
         Undo.RecordObject(text, "Configure " + name);
         text.font = BuiltinFont();
         text.fontSize = fontSize;
-        text.alignment = anchor;
+        text.alignment = UiRect.Align(anchor);
         text.color = color ?? Color.white;
-        text.horizontalOverflow = HorizontalWrapMode.Wrap;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
+        // Overflow rather than TMP's default Truncate: a caption that outgrows its box should be
+        // visibly wrong, not silently absent.
+        text.overflowMode = TextOverflowModes.Overflow;
         text.text = content;
         return text;
     }

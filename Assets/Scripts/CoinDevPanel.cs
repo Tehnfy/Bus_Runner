@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -31,7 +32,7 @@ public class CoinDevPanel : MonoBehaviour
 
     [Header("Readout")]
     [Tooltip("Reports the save state and confirms what each button did.")]
-    [SerializeField] Text status;
+    [SerializeField] TMP_Text status;
 
     [Tooltip("Shown instead of the state line while a wipe is armed.")]
     [SerializeField] float confirmWindow = 4f;

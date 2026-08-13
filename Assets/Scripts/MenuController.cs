@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -32,9 +33,9 @@ public class MenuController : MonoBehaviour
     [Tooltip("One button per unlocked level is built into this at startup.")]
     [SerializeField] RectTransform levelList;
 
-    [Tooltip("Font for the generated level buttons. Wired to the same built-in font the " +
-             "hand-placed labels use; falls back to looking it up if left empty.")]
-    [SerializeField] Font levelButtonFont;
+    [Tooltip("Font asset for the generated level buttons. Wired to the same one the hand-placed " +
+             "captions use; falls back to the project's TMP default if left empty.")]
+    [SerializeField] TMP_FontAsset levelButtonFont;
 
     // Matches the hand-placed buttons, so a generated row does not look bolted on.
     static readonly Color LevelButtonColor = new Color(0.2f, 0.55f, 0.85f, 0.9f);
@@ -104,6 +105,26 @@ public class MenuController : MonoBehaviour
         SceneManager.LoadScene(levelScenes[index], LoadSceneMode.Single);
     }
 
+    /// <summary>
+    /// Closes the game.
+    ///
+    /// Application.Quit does nothing in the editor and nothing in a play-mode test, so play mode is
+    /// stopped explicitly instead — otherwise the button reads as broken every time it is tried from
+    /// the editor, which is the only place it gets tried during development.
+    ///
+    /// Nothing is flushed here on purpose: CoinWalletFlusher writes the wallet from
+    /// OnApplicationQuit, and that fires for both branches below. Saving again from here would
+    /// duplicate the write and put the knowledge of what needs persisting in two places.
+    /// </summary>
+    public void QuitGame()
+    {
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
+    }
+
     void Show(GameObject panel)
     {
         // Every panel is addressed, not just the incoming one — otherwise whichever was
@@ -150,14 +171,17 @@ public class MenuController : MonoBehaviour
 
             var labelGo = UiRect.Stretch(go.transform, "Label");
 
-            var label = labelGo.AddComponent<Text>();
+            var label = labelGo.AddComponent<TextMeshProUGUI>();
             label.font = font;
             label.fontSize = LevelButtonFontSize;
-            label.alignment = TextAnchor.MiddleCenter;
+            label.alignment = TextAlignmentOptions.Midline;
             label.color = Color.white;
+            // Overflow rather than TMP's default Truncate: a level name too long for its row should
+            // be visibly wrong instead of vanishing.
+            label.overflowMode = TextOverflowModes.Overflow;
             label.text = levelScenes[index].Replace('_', ' ').ToUpperInvariant();
         }
     }
 
-    Font BuiltinFont() => UiRect.ResolveFont(levelButtonFont, "MenuController");
+    TMP_FontAsset BuiltinFont() => UiRect.ResolveFont(levelButtonFont, "MenuController");
 }

@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -22,10 +23,10 @@ public class ControlsPanel : MonoBehaviour
     [SerializeField] GameObject listener;
     [Tooltip("The box that turns red on a conflict.")]
     [SerializeField] Image listenerWindow;
-    [SerializeField] Text listenerPrompt;
-    [SerializeField] Text listenerHint;
+    [SerializeField] TMP_Text listenerPrompt;
+    [SerializeField] TMP_Text listenerHint;
 
-    [SerializeField] Font font;
+    [SerializeField] TMP_FontAsset font;
 
     static readonly Color SlotColor = new Color(0.22f, 0.25f, 0.31f, 0.95f);
     static readonly Color WindowColor = new Color(0.09f, 0.11f, 0.15f, 0.98f);
@@ -35,7 +36,7 @@ public class ControlsPanel : MonoBehaviour
     const float NameWidth = 240f;
     const int RowFontSize = 34;
 
-    Text[,] slotLabels;
+    TMP_Text[,] slotLabels;
     bool built;
 
     bool listening;
@@ -169,7 +170,7 @@ public class ControlsPanel : MonoBehaviour
         for (int i = rows.childCount - 1; i >= 0; i--) Destroy(rows.GetChild(i).gameObject);
 
         var actions = InputBindings.Actions;
-        slotLabels = new Text[actions.Length, InputBindings.SlotCount];
+        slotLabels = new TMP_Text[actions.Length, InputBindings.SlotCount];
 
         foreach (var action in actions)
         {
@@ -226,15 +227,19 @@ public class ControlsPanel : MonoBehaviour
             }
     }
 
-    Text MakeLabel(Transform parent, string name, string content, TextAnchor anchor)
+    TMP_Text MakeLabel(Transform parent, string name, string content, TextAnchor anchor)
     {
         var go = UiRect.Stretch(parent, name);
 
-        var text = go.AddComponent<Text>();
+        var text = go.AddComponent<TextMeshProUGUI>();
         text.font = UiRect.ResolveFont(font, "ControlsPanel");
         text.fontSize = RowFontSize;
-        text.alignment = anchor;
+        text.alignment = UiRect.Align(anchor);
         text.color = Color.white;
+        // A binding name is one short token. Overflow rather than TMP's default Truncate, so a long
+        // one reads as too long instead of disappearing.
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Overflow;
         text.text = content;
         return text;
     }

@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -46,6 +47,16 @@ static class MenuSetup
     static readonly Vector2 BackMax = new Vector2(0.60f, 0.18f);
     static readonly Vector2 HeaderMin = new Vector2(0.15f, 0.50f);
     static readonly Vector2 HeaderMax = new Vector2(0.85f, 0.58f);
+
+    // Same y band as the main panel's coin strip on the right, so the two top corners line up.
+    static readonly Vector2 ExitMin = new Vector2(0.02f, 0.87f);
+    static readonly Vector2 ExitMax = new Vector2(0.20f, 0.99f);
+
+    // Fractions of the Exit button. At the size above this leaves the icon slot very close to
+    // square on a 16:9 canvas, which is the shape an icon is usually drawn to.
+    const float IconWidth = 0.30f;
+    const float IconPad = 0.05f;
+    const int ExitFontSize = 32;
 
     [MenuItem("Bus Runner/Set Up Start Menu")]
     static void Run()
@@ -124,6 +135,8 @@ static class MenuSetup
         var optionsButton = UiBuild.MakeButton(panel.transform, "OptionsButton", "OPTIONS",
             new Vector2(0.35f, 0.06f), new Vector2(0.65f, 0.16f), ActionColor, 44);
 
+        BuildExitButton(panel.transform, controller);
+
         UiBuild.Bind(playButton, controller.PlayLevel);
         UiBuild.Bind(shopButton, controller.ShowShop);
         UiBuild.Bind(levelSelectButton, controller.ShowLevelSelect);
@@ -136,6 +149,104 @@ static class MenuSetup
             CoinCounter.Readout.Total, TextAnchor.MiddleRight, fontSize: 26, rowHeight: 30f, spacing: 2f);
 
         return panel;
+    }
+
+    /// <summary>
+    /// Adds just the Exit button, without rebuilding the rest of the menu. Menu:
+    /// Bus Runner &gt; Add Exit Button.
+    ///
+    /// Kept separate from Set Up Start Menu so the button can be added or repositioned without
+    /// re-placing every other control on the screen — that command rewrites each panel back to the
+    /// anchors in this file, which is more than anyone wants when only one corner is in question.
+    /// </summary>
+    [MenuItem("Bus Runner/Add Exit Button")]
+    static void AddExitButton()
+    {
+        // Refused rather than merged into: this command saves when it is done, and Menu may be
+        // holding edits from a half-finished Set Up Start Menu. Saving those would bake a partial
+        // rebuild into the file, and deciding to discard them is the caller's call, not this one's.
+        var active = EditorSceneManager.GetActiveScene();
+        if (active.path == ScenePath && active.isDirty)
+        {
+            Debug.LogError("[MenuSetup] Menu.unity has unsaved changes. Reopen it without saving — or " +
+                           "save them deliberately — then run this again.");
+            return;
+        }
+
+        if (!UiBuild.OpenTargetScene(ScenePath, "MenuSetup")) return;
+
+        var canvas = UiBuild.FindRoot(CanvasName);
+        var controllerGo = UiBuild.FindRoot("MenuController");
+        if (canvas == null || controllerGo == null)
+        {
+            Debug.LogError($"[MenuSetup] {ScenePath} is missing '{CanvasName}' or 'MenuController'.");
+            return;
+        }
+
+        var controller = controllerGo.GetComponent<MenuController>();
+        var panel = canvas.transform.Find("MainPanel");
+        if (controller == null || panel == null)
+        {
+            Debug.LogError("[MenuSetup] Need a MenuController component and a MainPanel under the canvas.");
+            return;
+        }
+
+        Undo.SetCurrentGroupName("Add Exit Button");
+        int group = Undo.GetCurrentGroup();
+        BuildExitButton(panel, controller);
+        Undo.CollapseUndoOperations(group);
+
+        var scene = EditorSceneManager.GetActiveScene();
+        EditorSceneManager.MarkSceneDirty(scene);
+        EditorSceneManager.SaveScene(scene);
+        Debug.Log("[MenuSetup] ExitButton added to MainPanel, bound to MenuController.QuitGame. Drop the " +
+                  "artwork on its Icon child when it exists — the Image is deliberately spriteless.");
+    }
+
+    /// <summary>
+    /// The main menu's Exit control: a box carrying an icon on the left with its caption beside it,
+    /// in the top-left corner opposite the coin strip.
+    ///
+    /// The Icon child's Image is created with no sprite on purpose. It draws as a plain white square
+    /// until the artwork is dropped on it, so the button can be placed, sized and wired before the
+    /// art exists.
+    /// </summary>
+    static Button BuildExitButton(Transform panel, MenuController controller)
+    {
+        var go = UiBuild.Child(panel, "ExitButton");
+        UiBuild.Place(go, ExitMin, ExitMax);
+
+        var image = go.GetComponent<Image>();
+        if (image == null) image = Undo.AddComponent<Image>(go);
+        Undo.RecordObject(image, "Configure ExitButton");
+        image.color = BackColor;
+
+        var button = go.GetComponent<Button>();
+        if (button == null) button = Undo.AddComponent<Button>(go);
+        Undo.RecordObject(button, "Configure ExitButton");
+        button.targetGraphic = image;
+
+        var iconGo = UiBuild.Child(go.transform, "Icon");
+        UiBuild.Place(iconGo, new Vector2(IconPad, 0.14f), new Vector2(IconPad + IconWidth, 0.86f));
+        var icon = iconGo.GetComponent<Image>();
+        if (icon == null) icon = Undo.AddComponent<Image>(iconGo);
+        Undo.RecordObject(icon, "Configure ExitButton Icon");
+        // Set now rather than when the sprite arrives: an Image stretches its sprite to the rect by
+        // default, and this slot is not the shape of the icon that will land in it.
+        icon.preserveAspect = true;
+        // The click belongs to the box underneath. An icon that swallowed it would leave a dead spot
+        // in the middle of the control.
+        icon.raycastTarget = false;
+
+        // Left-aligned, because the caption starts where the icon ends. Centring it in the leftover
+        // space would leave the gap between icon and text changing width with the wording.
+        var label = UiBuild.Label(go.transform, "Label", "Exit",
+            new Vector2(IconPad * 2f + IconWidth, 0.1f), new Vector2(1f - IconPad, 0.9f),
+            ExitFontSize, anchor: TextAnchor.MiddleLeft);
+        label.raycastTarget = false;
+
+        UiBuild.Bind(button, controller.QuitGame);
+        return button;
     }
 
     /// <summary>
@@ -360,7 +471,7 @@ static class MenuSetup
     /// that ControlsPanel recolours when the key is already taken.
     /// </summary>
     static GameObject BuildRebindPrompt(
-        Transform panel, out Image window, out Text prompt, out Text hint)
+        Transform panel, out Image window, out TMP_Text prompt, out TMP_Text hint)
     {
         var listener = UiBuild.Child(panel, "RebindPrompt");
         UiBuild.Place(listener, Vector2.zero, Vector2.one);
