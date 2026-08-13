@@ -29,6 +29,11 @@ static class MenuSetup
     // another way into a level.
     static readonly Color ShopColor = new Color(0.55f, 0.32f, 0.78f, 0.92f);
 
+    // Dev tools read as tools, not as menu options — nothing here should look like something a player
+    // is meant to press.
+    static readonly Color DevColor = new Color(0.28f, 0.38f, 0.34f, 0.95f);
+    static readonly Color DevWipeColor = new Color(0.52f, 0.24f, 0.22f, 0.95f);
+
     const string CoinSettingsPath = "Assets/Settings/CoinSettings.asset";
 
     // ControlsPanel overwrites the window colour as soon as a rebind starts; these are what the
@@ -67,15 +72,17 @@ static class MenuSetup
 
         var main = BuildMainPanel(canvas.transform, controller);
         var levelSelect = BuildLevelSelectPanel(canvas.transform, controller, out var levelList);
-        var options = BuildOptionsPanel(canvas.transform, controller);
+        var options = BuildOptionsPanel(canvas.transform, controller, out var devButton);
         var controls = BuildControlsPanel(canvas.transform, controller);
         var shop = BuildShopPanel(canvas.transform, controller);
+        var dev = BuildDevPanel(canvas.transform, controller, devButton);
 
         UiBuild.SetRef(controller, "mainPanel", main);
         UiBuild.SetRef(controller, "levelSelectPanel", levelSelect);
         UiBuild.SetRef(controller, "optionsPanel", options);
         UiBuild.SetRef(controller, "controlsPanel", controls);
         UiBuild.SetRef(controller, "shopPanel", shop);
+        UiBuild.SetRef(controller, "devPanel", dev);
         UiBuild.SetRef(controller, "levelList", levelList);
         UiBuild.SetRef(controller, "levelButtonFont", UiBuild.BuiltinFont());
 
@@ -85,6 +92,7 @@ static class MenuSetup
         options.SetActive(false);
         controls.SetActive(false);
         shop.SetActive(false);
+        dev.SetActive(false);
 
         Undo.CollapseUndoOperations(group);
         var scene = EditorSceneManager.GetActiveScene();
@@ -120,6 +128,94 @@ static class MenuSetup
         UiBuild.Bind(shopButton, controller.ShowShop);
         UiBuild.Bind(levelSelectButton, controller.ShowLevelSelect);
         UiBuild.Bind(optionsButton, controller.ShowOptions);
+
+        // What the player has, on the first screen they see — the Shop is one tap further in, and a
+        // currency nobody can see until they go looking for it is not a currency they will play for.
+        BuildBalances(panel.transform, "CoinStrip",
+            new Vector2(0.62f, 0.87f), new Vector2(0.98f, 0.99f),
+            CoinCounter.Readout.Total, TextAnchor.MiddleRight, fontSize: 26, rowHeight: 30f, spacing: 2f);
+
+        return panel;
+    }
+
+    /// <summary>
+    /// A CoinCounter and the layout group that stacks its rows. Shared by the main menu's corner strip
+    /// and the Shop's balance block: same component the in-run HUD uses, so a fourth coin type appears
+    /// in all three without touching any of them.
+    /// </summary>
+    static CoinCounter BuildBalances(
+        Transform parent, string name, Vector2 anchorMin, Vector2 anchorMax,
+        CoinCounter.Readout readout, TextAnchor alignment, int fontSize, float rowHeight, float spacing)
+    {
+        var go = UiBuild.Child(parent, name);
+        UiBuild.Place(go, anchorMin, anchorMax);
+
+        var layout = go.GetComponent<VerticalLayoutGroup>();
+        if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(go);
+        Undo.RecordObject(layout, "Configure " + name);
+        layout.childControlWidth = true;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+        layout.spacing = spacing;
+
+        var counter = go.GetComponent<CoinCounter>();
+        if (counter == null) counter = Undo.AddComponent<CoinCounter>(go);
+
+        UiBuild.SetRef(counter, "rows", go.GetComponent<RectTransform>());
+        UiBuild.SetRef(counter, "settings", AssetDatabase.LoadAssetAtPath<CoinSettings>(CoinSettingsPath));
+        UiBuild.SetRef(counter, "font", UiBuild.BuiltinFont());
+        UiBuild.SetEnum(counter, "readout", (int)readout);
+        UiBuild.SetEnum(counter, "alignment", (int)alignment);
+        UiBuild.SetInt(counter, "fontSize", fontSize);
+        UiBuild.SetFloat(counter, "rowHeight", rowHeight);
+        // A zero balance is information on a menu — it says the currency exists and you have none of
+        // it. Only the in-run HUD hides an untouched row.
+        UiBuild.SetBool(counter, "hideUntilEarned", false);
+        return counter;
+    }
+
+    /// <summary>
+    /// The coin save tools. Reached from Options and hidden entirely when CoinDevPanel's own switch is
+    /// off, which also takes the button in Options with it.
+    ///
+    /// Deliberately three separate buttons rather than one wipe. Permanent and Special are the two
+    /// types a second pass through a level cannot test, and they are usually wanted back one at a time.
+    /// </summary>
+    static GameObject BuildDevPanel(Transform canvas, MenuController controller, GameObject launcher)
+    {
+        var panel = UiBuild.Child(canvas, "DevPanel");
+        UiBuild.Place(panel, Vector2.zero, Vector2.one);
+
+        UiBuild.Label(panel.transform, "Header", "COIN DEV TOOLS", HeaderMin, HeaderMax, 48);
+        UiBuild.Label(panel.transform, "Warning",
+            "Wipes saved coin progress on this device. Each button asks twice.",
+            new Vector2(0.12f, 0.43f), new Vector2(0.88f, 0.49f), 26, WarnText);
+
+        var status = UiBuild.Label(panel.transform, "Status", "",
+            new Vector2(0.20f, 0.30f), new Vector2(0.80f, 0.42f), 26, MutedText);
+
+        var permanent = UiBuild.MakeButton(panel.transform, "ResetPermanentButton", "RESET PERMANENT",
+            new Vector2(0.28f, 0.23f), new Vector2(0.72f, 0.29f), DevColor, 30);
+        var special = UiBuild.MakeButton(panel.transform, "ResetSpecialButton", "RESET SPECIAL",
+            new Vector2(0.28f, 0.16f), new Vector2(0.72f, 0.22f), DevColor, 30);
+        var everything = UiBuild.MakeButton(panel.transform, "ResetAllButton", "RESET ALL COINS",
+            new Vector2(0.28f, 0.09f), new Vector2(0.72f, 0.15f), DevWipeColor, 30);
+
+        var devPanel = panel.GetComponent<CoinDevPanel>();
+        if (devPanel == null) devPanel = Undo.AddComponent<CoinDevPanel>(panel);
+
+        UiBuild.Bind(permanent, devPanel.ResetPermanent);
+        UiBuild.Bind(special, devPanel.ResetSpecial);
+        UiBuild.Bind(everything, devPanel.ResetEverything);
+
+        UiBuild.SetRef(devPanel, "status", status);
+        UiBuild.SetRefArray(devPanel, "launchers", launcher);
+
+        // Back to Options, where the button that opens this lives.
+        var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK",
+            new Vector2(0.40f, 0.01f), new Vector2(0.60f, 0.07f), BackColor, 30);
+        UiBuild.Bind(back, controller.ShowOptions);
         return panel;
     }
 
@@ -142,25 +238,10 @@ static class MenuSetup
                       "being saved and will spend here.",
             new Vector2(0.12f, 0.34f), new Vector2(0.88f, 0.41f), 28, MutedText);
 
-        // Balances, stacked by a layout group so the row count follows the coin types.
-        var balances = UiBuild.Child(panel.transform, "Balances");
-        UiBuild.Place(balances, new Vector2(0.36f, 0.20f), new Vector2(0.64f, 0.33f));
-
-        var layout = balances.GetComponent<VerticalLayoutGroup>();
-        if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(balances);
-        layout.childControlWidth = true;
-        layout.childControlHeight = false;
-        layout.childForceExpandWidth = true;
-        layout.childForceExpandHeight = false;
-        layout.spacing = 6f;
-
-        var counter = balances.GetComponent<CoinCounter>();
-        if (counter == null) counter = Undo.AddComponent<CoinCounter>(balances);
-        UiBuild.SetRef(counter, "rows", balances.GetComponent<RectTransform>());
-        UiBuild.SetRef(counter, "settings", AssetDatabase.LoadAssetAtPath<CoinSettings>(CoinSettingsPath));
-        UiBuild.SetRef(counter, "font", UiBuild.BuiltinFont());
         // Lifetime totals here — this is the pile unlocks will spend from.
-        UiBuild.SetEnum(counter, "readout", (int)CoinCounter.Readout.Total);
+        BuildBalances(panel.transform, "Balances",
+            new Vector2(0.34f, 0.19f), new Vector2(0.66f, 0.33f),
+            CoinCounter.Readout.Total, TextAnchor.MiddleCenter, fontSize: 34, rowHeight: 44f, spacing: 6f);
 
         var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK", BackMin, BackMax, BackColor, 40);
         UiBuild.Bind(back, controller.ShowMain);
@@ -196,7 +277,8 @@ static class MenuSetup
         return panel;
     }
 
-    static GameObject BuildOptionsPanel(Transform canvas, MenuController controller)
+    static GameObject BuildOptionsPanel(
+        Transform canvas, MenuController controller, out GameObject devButton)
     {
         var panel = UiBuild.Child(canvas, "OptionsPanel");
         UiBuild.Place(panel, Vector2.zero, Vector2.one);
@@ -204,15 +286,21 @@ static class MenuSetup
         UiBuild.Label(panel.transform, "Header", "OPTIONS", HeaderMin, HeaderMax, 48);
 
         var controls = UiBuild.MakeButton(panel.transform, "ControlsButton", "CONTROLS",
-            new Vector2(0.35f, 0.37f), new Vector2(0.65f, 0.47f), ActionColor, 40);
+            new Vector2(0.35f, 0.40f), new Vector2(0.65f, 0.49f), ActionColor, 40);
         UiBuild.Bind(controls, controller.ShowControls);
+
+        // Handed back so CoinDevPanel can hide it along with itself.
+        var dev = UiBuild.MakeButton(panel.transform, "DevToolsButton", "COIN DEV TOOLS",
+            new Vector2(0.35f, 0.31f), new Vector2(0.65f, 0.38f), DevColor, 30);
+        UiBuild.Bind(dev, controller.ShowDev);
+        devButton = dev.gameObject;
 
         // Controls has left this list — the rest is still placeholder.
         UiBuild.Label(panel.transform, "Planned",
             "Game Volume\nMusic Volume\nGraphics Preset",
-            new Vector2(0.25f, 0.26f), new Vector2(0.75f, 0.35f), 32, MutedText);
+            new Vector2(0.25f, 0.22f), new Vector2(0.75f, 0.30f), 32, MutedText);
         UiBuild.Label(panel.transform, "Status", "IN DEVELOPMENT",
-            new Vector2(0.25f, 0.20f), new Vector2(0.75f, 0.25f), 36, WarnText);
+            new Vector2(0.25f, 0.185f), new Vector2(0.75f, 0.22f), 30, WarnText);
 
         var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK",
             BackMin, BackMax, BackColor, 40);

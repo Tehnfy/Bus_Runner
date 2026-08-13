@@ -31,6 +31,13 @@ public static class CoinWallet
     const string BalanceKeyPrefix = "coins.balance.";
     const string CollectedKeyPrefix = "coins.taken.";
 
+    // Which one-time coins have been taken, per type, as a list of "scene.id" entries. PlayerPrefs
+    // cannot be enumerated, so without this index a collected mark is write-only: findable if you
+    // already know the coin, unreachable otherwise — and the dev reset has to reach every one of them
+    // without knowing which levels exist.
+    const string CollectedIndexPrefix = "coins.takenIndex.";
+    const char IndexSeparator = ';';
+
     static readonly CoinType[] AllTypes = (CoinType[])Enum.GetValues(typeof(CoinType));
 
     static int[] balances;
@@ -105,16 +112,36 @@ public static class CoinWallet
     }
 
     /// <summary>
-    /// Whether a one-time coin has already been taken. Keyed on the scene as well as the coin, so
-    /// two levels may reuse an id without colliding.
+    /// Whether a one-time coin has already been taken. Keyed on the type and the scene as well as the
+    /// coin: two levels may reuse an id without colliding, and the type in the key is what lets the
+    /// dev reset clear the Permanent marks without touching the Special ones.
     /// </summary>
-    public static bool IsCollected(string scene, string coinId) =>
-        !string.IsNullOrEmpty(coinId) && PlayerPrefs.GetInt(CollectedKey(scene, coinId), 0) == 1;
+    public static bool IsCollected(CoinType type, string scene, string coinId) =>
+        !string.IsNullOrEmpty(coinId) && PlayerPrefs.GetInt(CollectedKey(type, scene, coinId), 0) == 1;
 
-    public static void MarkCollected(string scene, string coinId)
+    public static void MarkCollected(CoinType type, string scene, string coinId)
     {
         if (string.IsNullOrEmpty(coinId)) return;
-        PlayerPrefs.SetInt(CollectedKey(scene, coinId), 1);
+
+        PlayerPrefs.SetInt(CollectedKey(type, scene, coinId), 1);
+        AddToIndex(type, Entry(scene, coinId));
+        dirty = true;
+    }
+
+    /// <summary>How many one-time coins of this type the save says have been taken.</summary>
+    public static int CollectedCount(CoinType type) => ReadIndex(type).Length;
+
+    /// <summary>
+    /// Forgets a single collected mark. Deletes the pre-type key shape as well, so a coin taken
+    /// before the type was part of the key does not stay invisible forever.
+    /// </summary>
+    public static void ForgetCollected(CoinType type, string scene, string coinId)
+    {
+        if (string.IsNullOrEmpty(coinId)) return;
+
+        PlayerPrefs.DeleteKey(CollectedKey(type, scene, coinId));
+        PlayerPrefs.DeleteKey(CollectedKeyPrefix + Entry(scene, coinId));   // legacy, typeless
+        RemoveFromIndex(type, Entry(scene, coinId));
         dirty = true;
     }
 
@@ -131,24 +158,96 @@ public static class CoinWallet
     }
 
     /// <summary>
-    /// Wipes balances and every collected mark, for testing. Levels are not enumerable from here, so
-    /// this uses PlayerPrefs.DeleteKey per balance and asks the caller to clear collected marks by
-    /// scene — or DeleteAll if they are willing to lose key bindings too.
+    /// Puts one coin type back to how a fresh save finds it: balance at zero, and every one-time coin
+    /// of that type placed in the world again.
+    ///
+    /// Both halves, deliberately. Clearing the marks alone leaves the coins collectable a second time
+    /// with the balance they already paid still banked, so a few resets and the save reads forty
+    /// Permanents with none left in the level to explain them.
+    ///
+    /// Respawnable coins never record a mark, so for that type this only zeroes the balance.
     /// </summary>
-    public static void ResetBalances()
+    /// <returns>How many collected marks were cleared.</returns>
+    public static int ResetType(CoinType type)
     {
         EnsureLoaded();
-        foreach (var type in AllTypes)
-        {
-            balances[(int)type] = 0;
-            PlayerPrefs.DeleteKey(BalanceKeyPrefix + type);
-            BalanceChanged?.Invoke(type, 0);
-        }
+        ZeroBalance(type);
+        int cleared = ResetCollected(type);
         dirty = true;
         Flush();
+        return cleared;
     }
 
-    static string CollectedKey(string scene, string coinId) => CollectedKeyPrefix + scene + "." + coinId;
+    /// <summary>Every type, balances and marks together.</summary>
+    public static int ResetAll()
+    {
+        int cleared = 0;
+        foreach (var type in AllTypes) cleared += ResetType(type);
+        return cleared;
+    }
+
+    /// <summary>
+    /// Clears the collected marks for one type, so its one-time coins appear again. Reachable only
+    /// through the index — a mark written before that index existed is not enumerable, which is why
+    /// the editor-side reset also sweeps the coins actually placed in the open scene.
+    /// </summary>
+    /// <returns>How many marks were cleared.</returns>
+    public static int ResetCollected(CoinType type)
+    {
+        var entries = ReadIndex(type);
+        foreach (var entry in entries)
+        {
+            PlayerPrefs.DeleteKey(CollectedKeyPrefix + type + "." + entry);
+            PlayerPrefs.DeleteKey(CollectedKeyPrefix + entry);   // legacy, typeless
+        }
+
+        PlayerPrefs.DeleteKey(CollectedIndexPrefix + type);
+        dirty = true;
+        return entries.Length;
+    }
+
+    static void ZeroBalance(CoinType type)
+    {
+        balances[(int)type] = 0;
+        session[(int)type] = 0;
+        PlayerPrefs.DeleteKey(BalanceKeyPrefix + type);
+        BalanceChanged?.Invoke(type, 0);
+    }
+
+    static string Entry(string scene, string coinId) => scene + "." + coinId;
+
+    static string CollectedKey(CoinType type, string scene, string coinId) =>
+        CollectedKeyPrefix + type + "." + Entry(scene, coinId);
+
+    static string[] ReadIndex(CoinType type)
+    {
+        string raw = PlayerPrefs.GetString(CollectedIndexPrefix + type, string.Empty);
+        return raw.Length == 0
+            ? Array.Empty<string>()
+            : raw.Split(IndexSeparator, StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    static void AddToIndex(CoinType type, string entry)
+    {
+        string key = CollectedIndexPrefix + type;
+        string raw = PlayerPrefs.GetString(key, string.Empty);
+
+        // Guarded against a repeat: the same coin can be marked again after a reset, and an index
+        // growing a duplicate entry per reset would eventually outgrow what PlayerPrefs will store.
+        foreach (var existing in ReadIndex(type))
+            if (existing == entry) return;
+
+        PlayerPrefs.SetString(key, raw.Length == 0 ? entry : raw + IndexSeparator + entry);
+    }
+
+    static void RemoveFromIndex(CoinType type, string entry)
+    {
+        var kept = new System.Collections.Generic.List<string>();
+        foreach (var existing in ReadIndex(type))
+            if (existing != entry) kept.Add(existing);
+
+        PlayerPrefs.SetString(CollectedIndexPrefix + type, string.Join(IndexSeparator, kept));
+    }
 
     static void EnsureLoaded()
     {

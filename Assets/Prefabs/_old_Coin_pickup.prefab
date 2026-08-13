@@ -11,9 +11,10 @@ GameObject:
   - component: {fileID: 209947014589744388}
   - component: {fileID: 320568306019171331}
   - component: {fileID: 5452989505738652612}
-  - component: {fileID: 7387264368658663546}
-  m_Layer: 0
-  m_Name: Coin_pickup
+  - component: {fileID: -7811862649742796479}
+  - component: {fileID: 3066360383994839193}
+  m_Layer: 11
+  m_Name: _old_Coin_pickup
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -91,8 +92,26 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
---- !u!136 &7387264368658663546
-CapsuleCollider:
+--- !u!114 &-7811862649742796479
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3735645370628389578}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b119431d8abe4fb49941ac224813f40f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Coin
+  type: 1
+  settings: {fileID: 0}
+  coinId: 
+  fallbackSpinSpeed: 90
+  fallbackHoverAmplitude: 0.15
+  fallbackHoverFrequency: 0.5
+--- !u!65 &3066360383994839193
+BoxCollider:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -106,11 +125,9 @@ CapsuleCollider:
     serializedVersion: 2
     m_Bits: 0
   m_LayerOverridePriority: 0
-  m_IsTrigger: 0
+  m_IsTrigger: 1
   m_ProvidesContacts: 0
   m_Enabled: 1
-  serializedVersion: 2
-  m_Radius: 0.5000001
-  m_Height: 2
-  m_Direction: 1
-  m_Center: {x: 0.000000059604645, y: 0, z: -0.00000008940697}
+  serializedVersion: 3
+  m_Size: {x: 1.4634488, y: 1.9999999, z: 2.313959}
+  m_Center: {x: 0.000000078163865, y: 9.394319e-15, z: -0.0042472295}

@@ -171,6 +171,49 @@ static class UiBuild
         so.ApplyModifiedProperties();
     }
 
+    /// <summary>
+    /// Fills a private [SerializeField] array of object references, replacing whatever was there.
+    /// Rebuilt rather than appended to, so re-running a setup does not grow the array a duplicate
+    /// entry every time.
+    /// </summary>
+    public static void SetRefArray(Object target, string field, params Object[] values)
+    {
+        var so = new SerializedObject(target);
+        var prop = so.FindProperty(field);
+        if (prop == null || !prop.isArray)
+        {
+            Debug.LogWarning($"[UiBuild] {target.GetType().Name} has no serialized array '{field}'.");
+            return;
+        }
+
+        prop.arraySize = values.Length;
+        for (int i = 0; i < values.Length; i++)
+            prop.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+        so.ApplyModifiedProperties();
+    }
+
+    public static void SetInt(Object target, string field, int value) =>
+        Set(target, field, prop => prop.intValue = value);
+
+    public static void SetFloat(Object target, string field, float value) =>
+        Set(target, field, prop => prop.floatValue = value);
+
+    public static void SetBool(Object target, string field, bool value) =>
+        Set(target, field, prop => prop.boolValue = value);
+
+    static void Set(Object target, string field, System.Action<SerializedProperty> write)
+    {
+        var so = new SerializedObject(target);
+        var prop = so.FindProperty(field);
+        if (prop == null)
+        {
+            Debug.LogWarning($"[UiBuild] {target.GetType().Name} has no serialized field '{field}'.");
+            return;
+        }
+        write(prop);
+        so.ApplyModifiedProperties();
+    }
+
     /// <summary>Depth-first search by name, including inactive objects.</summary>
     public static Transform FindDeep(Transform root, string name)
     {

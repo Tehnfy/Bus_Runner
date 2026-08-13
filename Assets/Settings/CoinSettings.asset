@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6fae0b6603f34749aae96ff2a246fee, type: 3}
+  m_Name: CoinSettings
+  m_EditorClassIdentifier: Assembly-CSharp::CoinSettings
+  styles:
+  - type: 0
+    material: {fileID: 2100000, guid: 5832413ba5c5f8747b18a175195da773, type: 2}
+    baseColor: {r: 0.62, g: 0.31, b: 0.86, a: 1}
+    emissionColor: {r: 0.24655437, g: 0.091847636, b: 0.4528302, a: 1}
+    emissionIntensity: 10
+    spinSpeed: 90
+    hoverAmplitude: 0.15
+    hoverFrequency: 0.5
+    respawnsEachRun: 0
+    value: 1
+  - type: 1
+    material: {fileID: 2100000, guid: f30381ac71f6a2c49b8f93db4bb96c14, type: 2}
+    baseColor: {r: 0.78, g: 0.8, b: 0.85, a: 1}
+    emissionColor: {r: 0.72, g: 0.78, b: 0.88, a: 1}
+    emissionIntensity: 10
+    spinSpeed: 90
+    hoverAmplitude: 0.15
+    hoverFrequency: 0.5
+    respawnsEachRun: 1
+    value: 1
+  - type: 2
+    material: {fileID: 2100000, guid: 76f7bf1bed98f5147b94124aaf66a095, type: 2}
+    baseColor: {r: 1, g: 0.76, b: 0.24, a: 1}
+    emissionColor: {r: 0.5849056, g: 0.4212226, b: 0.1517444, a: 1}
+    emissionIntensity: 10
+    spinSpeed: 90
+    hoverAmplitude: 0.15
+    hoverFrequency: 0.5
+    respawnsEachRun: 0
+    value: 1

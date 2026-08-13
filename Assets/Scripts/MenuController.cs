@@ -25,6 +25,9 @@ public class MenuController : MonoBehaviour
     [SerializeField] GameObject controlsPanel;
     [Tooltip("Unlocks, once they exist. Carries an in-development notice and the coin balances for now.")]
     [SerializeField] GameObject shopPanel;
+    [Tooltip("Coin save tools for testing. Hides itself, and the button that opens it, when its own " +
+             "dev-controls switch is off.")]
+    [SerializeField] GameObject devPanel;
 
     [Tooltip("One button per unlocked level is built into this at startup.")]
     [SerializeField] RectTransform levelList;
@@ -50,8 +53,21 @@ public class MenuController : MonoBehaviour
         // any other way must not leave the menu sitting on a frozen clock.
         Time.timeScale = 1f;
 
+        ApplyDevAvailability();
         BuildLevelList();
         ShowMain();
+    }
+
+    /// <summary>
+    /// Lets the dev panel decide whether it exists in this build, and forgets it if not — so Show can
+    /// never bring back a panel that just switched itself off.
+    /// </summary>
+    void ApplyDevAvailability()
+    {
+        if (devPanel == null) return;
+
+        var dev = devPanel.GetComponent<CoinDevPanel>();
+        if (dev != null && !dev.ApplyAvailability()) devPanel = null;
     }
 
     public void ShowMain() => Show(mainPanel);
@@ -59,6 +75,12 @@ public class MenuController : MonoBehaviour
     public void ShowOptions() => Show(optionsPanel);
     public void ShowControls() => Show(controlsPanel);
     public void ShowShop() => Show(shopPanel);
+    /// <summary>Guarded: with the controls switched off devPanel is null, and Show(null) would leave
+    /// the menu on no panel at all.</summary>
+    public void ShowDev()
+    {
+        if (devPanel != null) Show(devPanel);
+    }
 
     /// <summary>Starts the furthest level the player has unlocked.</summary>
     public void PlayLevel()
@@ -91,6 +113,7 @@ public class MenuController : MonoBehaviour
         if (optionsPanel != null) optionsPanel.SetActive(panel == optionsPanel);
         if (controlsPanel != null) controlsPanel.SetActive(panel == controlsPanel);
         if (shopPanel != null) shopPanel.SetActive(panel == shopPanel);
+        if (devPanel != null) devPanel.SetActive(panel == devPanel);
     }
 
     /// <summary>

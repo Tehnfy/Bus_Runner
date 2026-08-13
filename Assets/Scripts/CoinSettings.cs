@@ -93,7 +93,17 @@ public class CoinSettings : ScriptableObject
     /// the trap the checkpoint lamp already hit — so the keyword is set here rather than trusted from
     /// however the material was authored.
     /// </summary>
-    public void ApplyToMaterials()
+    /// <param name="save">
+    /// Write each touched material to disk. Needed because the _EMISSION keyword does not reliably
+    /// survive on its own: measured, after a setup pass that only marked the materials dirty and called
+    /// AssetDatabase.SaveAssets, all three read back with the keyword off and no glow. SetDirty followed
+    /// by SaveAssetIfDirty per material survives even a forced reimport.
+    ///
+    /// Off by default, because the live-preview path runs inside OnValidate and writing assets during
+    /// validation is not something to do casually — an unsaved dirty material still previews correctly
+    /// and gets written with the next project save.
+    /// </param>
+    public void ApplyToMaterials(bool save = false)
     {
         if (styles == null) return;
 
@@ -119,6 +129,7 @@ public class CoinSettings : ScriptableObject
             // Writing properties on a material asset does not reliably mark it for saving, so a
             // dialled-in glow would be lost on the next editor restart without this.
             UnityEditor.EditorUtility.SetDirty(style.material);
+            if (save) UnityEditor.AssetDatabase.SaveAssetIfDirty(style.material);
 #endif
         }
     }

@@ -15,7 +15,13 @@ using UnityEngine.Rendering.Universal;
 ///   three prefab variants of Coin_pickup, one per type
 ///   a Bloom override on BusRunnerVolumeProfile, without which emission does not read as glow
 ///
-/// The base Coin_pickup prefab is restructured on the way through — see RestructureBase.
+/// The variants are the thing a level designer touches: drag in Coin_Permanent, Coin_Respawnable or
+/// Coin_Special and it arrives already the right type, colour and rules. Because they are variants of
+/// Coin_pickup rather than copies, a change to the base disc — mesh, collider, transform — still flows
+/// through to all three. Switching an individual coin's Type dropdown afterwards re-materials it on the
+/// spot, so a mistake costs one dropdown rather than a delete and a re-drag.
+///
+/// The base prefab's own transform, mesh and collider are left exactly as authored — see RestructureBase.
 ///
 /// Safe to run more than once.
 /// </summary>
@@ -27,7 +33,6 @@ static class CoinSetup
     const string SettingsPath = "Assets/Settings/CoinSettings.asset";
     const string VolumeProfile = "Assets/Settings/BusRunnerVolumeProfile.asset";
     const string PickupLayer = "Pickup";
-    const string VisualChild = "Visual";
 
     // World radius of the pickup trigger. Generous on purpose: the coin's own disc is 0.03 thick,
     // and the runner covers 0.13 per frame at 8 m/s, so a trigger matching the art would be stepped
@@ -46,7 +51,8 @@ static class CoinSetup
         foreach (var type in CoinWallet.Types)
             EnsureVariant(type, settings);
 
-        settings.ApplyToMaterials();
+        // save: true — the _EMISSION keyword does not stick otherwise. See ApplyToMaterials.
+        settings.ApplyToMaterials(save: true);
         EditorUtility.SetDirty(settings);
 
         EnsureBloom();
@@ -96,13 +102,18 @@ static class CoinSetup
     }
 
     /// <summary>
-    /// Splits the coin into a plain root carrying the trigger and the script, with the artwork moved
-    /// to a child.
+    /// Makes sure the base coin has a Coin script, a trigger collider and the right layer — and
+    /// changes nothing else.
     ///
-    /// The prefab arrives as a single object whose transform is a squashed, rotated disc — scale
-    /// (0.38, 0.03, 0.38). Any collider on it inherits that squash, so the trigger would be 3cm tall
-    /// and easy to miss entirely at running speed, and spinning the root would tumble the disc end
-    /// over end rather than turning it on the spot. An unscaled root fixes both.
+    /// An earlier version rebuilt the prefab: mesh moved to a child, root unscaled and unrotated,
+    /// collider replaced with a sphere of TriggerRadius. That was wrong on both counts it was meant to
+    /// fix. The spin never needed it — Coin.Update rotates about world up, so a rotated root turns the
+    /// disc on the spot regardless. And the collider is hand-authored: unscaling a root that carries a
+    /// (0.381, 0.033, 0.381) squash turns a box sized for that squash into a 1.5 x 2.0 x 2.3 slab.
+    ///
+    /// So this leaves the transform, the mesh and the collider shape alone. Whatever collider is there
+    /// is forced to a trigger, which is the one property that actually matters: a solid coin registers
+    /// as a frontal wall and ends the run.
     /// </summary>
     static bool RestructureBase(int layer)
     {
@@ -115,38 +126,24 @@ static class CoinSetup
 
         try
         {
-            var visual = root.transform.Find(VisualChild);
-            if (visual == null)
+            foreach (var t in root.GetComponentsInChildren<Transform>(true))
+                t.gameObject.layer = layer;
+
+            var colliders = root.GetComponentsInChildren<Collider>(true);
+            if (colliders.Length == 0)
             {
-                // First run: the mesh is still on the root, so move it to a child that keeps the
-                // authored rotation and squash.
-                var child = new GameObject(VisualChild);
-                child.transform.SetParent(root.transform, false);
-                child.transform.localPosition = Vector3.zero;
-                child.transform.localRotation = root.transform.localRotation;
-                child.transform.localScale = root.transform.localScale;
-
-                Move<MeshFilter>(root, child);
-                Move<MeshRenderer>(root, child);
-                visual = child.transform;
+                // Nothing authored, so fall back to a sphere big enough not to be stepped over: the
+                // runner covers 0.16 per frame at 8 m/s.
+                var sphere = root.AddComponent<SphereCollider>();
+                sphere.radius = TriggerRadius;
+                sphere.center = Vector3.zero;
+                sphere.isTrigger = true;
+                Debug.Log($"[CoinSetup] {BasePrefab} had no collider — added a sphere trigger of {TriggerRadius}.");
             }
-
-            // The root is now pure logic: no scale, no rotation, so the spin turns the coin on the
-            // spot and the trigger is a true sphere.
-            root.transform.localPosition = Vector3.zero;
-            root.transform.localRotation = Quaternion.identity;
-            root.transform.localScale = Vector3.one;
-            root.layer = layer;
-            visual.gameObject.layer = layer;
-
-            foreach (var capsule in root.GetComponents<CapsuleCollider>())
-                Object.DestroyImmediate(capsule);
-
-            var trigger = root.GetComponent<SphereCollider>();
-            if (trigger == null) trigger = root.AddComponent<SphereCollider>();
-            trigger.isTrigger = true;
-            trigger.radius = TriggerRadius;
-            trigger.center = Vector3.zero;
+            else
+            {
+                foreach (var collider in colliders) collider.isTrigger = true;
+            }
 
             if (root.GetComponent<Coin>() == null) root.AddComponent<Coin>();
 
@@ -157,19 +154,6 @@ static class CoinSetup
         {
             PrefabUtility.UnloadPrefabContents(root);
         }
-    }
-
-    static void Move<T>(GameObject from, GameObject to) where T : Component
-    {
-        var source = from.GetComponent<T>();
-        if (source == null) return;
-
-        if (source is MeshFilter filter)
-            to.AddComponent<MeshFilter>().sharedMesh = filter.sharedMesh;
-        else if (source is MeshRenderer renderer)
-            to.AddComponent<MeshRenderer>().sharedMaterials = renderer.sharedMaterials;
-
-        Object.DestroyImmediate(source);
     }
 
     /// <summary>A variant per type, so a level designer drags in the coin they mean.</summary>
@@ -189,18 +173,50 @@ static class CoinSetup
                 // Reconfigure in place, so hand placements in scenes keep pointing at it.
                 ConfigureCoin(existing, type, settings, style);
                 EditorUtility.SetDirty(existing);
-                return;
+            }
+            else
+            {
+                ConfigureCoin(instance, type, settings, style);
+                // Instance of a prefab saved as a new asset becomes a variant of it, which is what keeps
+                // a change to the base disc flowing through to all three types.
+                PrefabUtility.SaveAsPrefabAsset(instance, path);
             }
 
-            ConfigureCoin(instance, type, settings, style);
-            // Instance of a prefab saved as a new asset becomes a variant of it, which is what keeps
-            // a change to the base disc flowing through to all three types.
-            PrefabUtility.SaveAsPrefabAsset(instance, path);
+            ClearAssetCoinId(path);
         }
         finally
         {
             Object.DestroyImmediate(instance);
         }
+    }
+
+    /// <summary>
+    /// Blanks the id on a variant asset, after it has been written.
+    ///
+    /// It has to happen here rather than before the save. The instance being configured lives in the
+    /// open scene — InstantiatePrefab puts it there — where a coin is entitled to an id, so Coin's
+    /// OnValidate mints one; and blanking the field through SerializedObject fires OnValidate again,
+    /// which mints another. Measured: three variants shipped with ids no matter how many times they were
+    /// cleared beforehand.
+    ///
+    /// On the saved asset the loop breaks, because a persistent object fails OnValidate's first check.
+    /// The id must be blank or every coin dragged from the variant shares it, and for the one-time types
+    /// that means taking any of them hides all the rest.
+    /// </summary>
+    static void ClearAssetCoinId(string path)
+    {
+        var asset = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+        var coin = asset != null ? asset.GetComponent<Coin>() : null;
+        if (coin == null) return;
+
+        var so = new SerializedObject(coin);
+        var slot = so.FindProperty("coinId");
+        if (string.IsNullOrEmpty(slot.stringValue)) return;
+
+        slot.stringValue = string.Empty;
+        so.ApplyModifiedPropertiesWithoutUndo();
+        EditorUtility.SetDirty(asset);
+        AssetDatabase.SaveAssetIfDirty(asset);
     }
 
     static void ConfigureCoin(GameObject go, CoinType type, CoinSettings settings, CoinSettings.Style style)
@@ -298,31 +314,175 @@ static class CoinSetup
     }
 
     /// <summary>
-    /// Gives every coin in the open scene a unique id, and reports any it had to break apart.
-    /// Duplicating a placed coin copies its id, and two coins sharing one means taking either hides
-    /// both — the OnValidate hook cannot see that, because a duplicate arrives already filled in.
+    /// Gives every coin in the open scenes an id that is its own, and leaves alone every coin whose id
+    /// already was.
+    ///
+    /// This is the duplicate-a-coin fix. Unity's duplicate arrives with coinId already filled, so
+    /// Coin's OnValidate hook — which only mints into a blank field — cannot tell it apart from the
+    /// original. Two Permanent or Special coins sharing an id means taking either one hides both,
+    /// because the collected mark is keyed on the id and not on the coin.
+    ///
+    /// The safe half of the pair: an untouched id keeps its collected mark valid, so a coin the player
+    /// has already banked stays banked. Use Randomize One-Time Coin IDs when that is not what you want.
     /// </summary>
-    [MenuItem("Bus Runner/Repair Coin IDs")]
-    static void RepairIds()
+    [MenuItem("Bus Runner/Coins/Fix Duplicate Coin IDs")]
+    static void FixDuplicateIds()
     {
-        var seen = new HashSet<string>();
-        int assigned = 0, freed = 0;
+        var coins = LoadedCoinsInOrder();
 
-        foreach (var coin in Object.FindObjectsByType<Coin>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        Undo.SetCurrentGroupName("Fix Duplicate Coin IDs");
+        int group = Undo.GetCurrentGroup();
+
+        var live = new HashSet<string>();
+        var freed = new List<(CoinType type, string scene, string id)>();
+        int filled = 0, split = 0;
+
+        foreach (var coin in coins)
         {
             string id = coin.CoinId;
-            if (string.IsNullOrEmpty(id)) assigned++;
-            else if (seen.Add(id)) continue;   // first sighting of a good id, nothing to do
-            else freed++;
 
-            var so = new SerializedObject(coin);
-            var slot = so.FindProperty("coinId");
-            slot.stringValue = System.Guid.NewGuid().ToString("N");
-            so.ApplyModifiedPropertiesWithoutUndo();
-            seen.Add(slot.stringValue);
+            // First sighting of a good id: the coin keeps it, and so keeps its collected mark.
+            if (!string.IsNullOrEmpty(id) && live.Add(id)) continue;
+
+            if (string.IsNullOrEmpty(id)) filled++;
+            else
+            {
+                split++;
+                freed.Add((coin.Type, coin.gameObject.scene.name, id));
+            }
+
+            live.Add(Mint(coin));
+            EditorSceneManager.MarkSceneDirty(coin.gameObject.scene);
         }
 
-        EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-        Debug.Log($"[CoinSetup] Coin ids — {assigned} blank filled, {freed} duplicates broken apart.");
+        Undo.CollapseUndoOperations(group);
+
+        int orphaned = ForgetOrphanedMarks(freed, live);
+        Debug.Log($"[CoinSetup] Coin ids across {UnityEngine.SceneManagement.SceneManager.loadedSceneCount} open scene(s): " +
+                  $"{coins.Count} coins, {filled} blank filled, {split} duplicate(s) broken apart, " +
+                  $"{orphaned} stale collected mark(s) cleaned up. Ctrl+Z undoes the id changes.");
+    }
+
+    /// <summary>
+    /// Re-rolls the id of every Permanent and Special coin in the open scenes, whether it needed it or
+    /// not — the "just give me fresh ids" pass for when a level has been built by duplicating coins and
+    /// you would rather not care which ones collided.
+    ///
+    /// Every one-time coin in those scenes becomes collectable again on this save, because a fresh id
+    /// has no collected mark against it. Respawnable coins are skipped: they never record a mark, so
+    /// their id is unused and changing it would be noise in the diff.
+    /// </summary>
+    [MenuItem("Bus Runner/Coins/Randomize One-Time Coin IDs")]
+    static void RandomizeOneTimeIds()
+    {
+        var coins = LoadedCoinsInOrder().FindAll(c => c.Type != CoinType.Respawnable);
+        if (coins.Count == 0)
+        {
+            Debug.Log("[CoinSetup] No Permanent or Special coins in the open scenes — nothing to randomize.");
+            return;
+        }
+
+        if (!EditorUtility.DisplayDialog(
+                "Randomize one-time coin IDs",
+                $"Gives all {coins.Count} Permanent and Special coin(s) in the open scenes a fresh id.\n\n" +
+                "Every one of them becomes collectable again on this save. Ctrl+Z restores the ids, but " +
+                "the collected marks cleared here stay cleared — they live in the save, not the scene.",
+                "Randomize", "Cancel"))
+            return;
+
+        Undo.SetCurrentGroupName("Randomize One-Time Coin IDs");
+        int group = Undo.GetCurrentGroup();
+
+        var live = new HashSet<string>();
+        var freed = new List<(CoinType type, string scene, string id)>();
+
+        foreach (var coin in coins)
+        {
+            if (!string.IsNullOrEmpty(coin.CoinId))
+                freed.Add((coin.Type, coin.gameObject.scene.name, coin.CoinId));
+
+            live.Add(Mint(coin));
+            EditorSceneManager.MarkSceneDirty(coin.gameObject.scene);
+        }
+
+        // Every Respawnable id stays where it is, and must not be read as orphaned.
+        foreach (var coin in LoadedCoinsInOrder())
+            if (coin.Type == CoinType.Respawnable && !string.IsNullOrEmpty(coin.CoinId))
+                live.Add(coin.CoinId);
+
+        Undo.CollapseUndoOperations(group);
+
+        int orphaned = ForgetOrphanedMarks(freed, live);
+        Debug.Log($"[CoinSetup] Randomized {coins.Count} one-time coin id(s) across " +
+                  $"{UnityEngine.SceneManagement.SceneManager.loadedSceneCount} open scene(s); {orphaned} collected mark(s) cleared. " +
+                  "Ctrl+Z undoes the id changes.");
+    }
+
+    /// <summary>
+    /// Every coin in every loaded scene, in an order that does not change between runs or machines.
+    ///
+    /// FindObjectsByType's order is unspecified, and the id tools use position in this list to decide
+    /// which of two colliding coins keeps its id — left unsorted, the same command could hand the id to
+    /// a different coin for two people on the same scene. Sorting by scene and hierarchy path also has
+    /// a useful side effect: Unity names a duplicate "Coin_Permanent (1)", which sorts after
+    /// "Coin_Permanent", so the original keeps its id and the copy is the one re-rolled.
+    /// </summary>
+    static List<Coin> LoadedCoinsInOrder()
+    {
+        var coins = new List<Coin>(
+            Object.FindObjectsByType<Coin>(FindObjectsInactive.Include, FindObjectsSortMode.None));
+
+        coins.Sort((a, b) => string.Compare(SortKey(a), SortKey(b), System.StringComparison.Ordinal));
+        return coins;
+    }
+
+    static string SortKey(Coin coin)
+    {
+        var path = coin.name;
+        for (var parent = coin.transform.parent; parent != null; parent = parent.parent)
+            path = parent.name + "/" + path;
+
+        return coin.gameObject.scene.path + "/" + path;
+    }
+
+    /// <summary>
+    /// Writes a fresh id and returns it. Goes through SerializedObject so the private field can be set,
+    /// and through ApplyModifiedProperties rather than ApplyModifiedPropertiesWithoutUndo so a whole
+    /// pass over a level's worth of coins is one Ctrl+Z.
+    /// </summary>
+    static string Mint(Coin coin)
+    {
+        var so = new SerializedObject(coin);
+        var slot = so.FindProperty("coinId");
+        slot.stringValue = System.Guid.NewGuid().ToString("N");
+        so.ApplyModifiedProperties();
+        return slot.stringValue;
+    }
+
+    /// <summary>
+    /// Drops the collected marks of ids that no coin holds any more.
+    ///
+    /// Re-rolling an id leaves its mark in the wallet with nothing to point at. That mark is
+    /// unreachable — no coin will ever ask about it again — but it still counts toward the taken tally
+    /// the dev panel reports, so left alone the numbers drift up every time a level is reshuffled.
+    ///
+    /// Nothing becomes collectable that was not already: the coin moved to a new id the moment it was
+    /// re-rolled, and a new id has no mark. This only clears the litter left behind.
+    /// </summary>
+    /// <param name="live">Every id still held by a coin — a duplicate's winner keeps its mark.</param>
+    static int ForgetOrphanedMarks(List<(CoinType type, string scene, string id)> freed, HashSet<string> live)
+    {
+        int cleared = 0;
+        foreach (var (type, scene, id) in freed)
+        {
+            if (live.Contains(id)) continue;                          // still in use by the coin that kept it
+            if (!CoinWallet.IsCollected(type, scene, id)) continue;   // never taken, nothing to clear
+
+            CoinWallet.ForgetCollected(type, scene, id);
+            cleared++;
+        }
+
+        if (cleared > 0) CoinWallet.Flush();
+        return cleared;
     }
 }

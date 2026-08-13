@@ -19,8 +19,9 @@ public class Coin : MonoBehaviour
     [SerializeField] CoinSettings settings;
 
     [Tooltip("Stable identity for a one-time coin, so the save knows which one was taken. Assigned " +
-             "automatically when the coin is placed; run Bus Runner > Repair Coin IDs if two coins " +
-             "ever end up sharing one, which duplicating a placed coin will do.")]
+             "automatically when the coin is placed, but NOT when one is duplicated — a copy arrives " +
+             "with this field already filled, and two coins sharing an id means taking either hides " +
+             "both. Run Bus Runner > Coins > Fix Duplicate Coin IDs after duplicating.")]
     [SerializeField] string coinId;
 
     [Header("Fallbacks")]
@@ -51,13 +52,39 @@ public class Coin : MonoBehaviour
         anchor = transform.position;
         hoverPhase = anchor.x * 0.7f + anchor.z * 1.3f;
         ReadStyle();
+        ForceTrigger();
+    }
+
+    /// <summary>
+    /// Coerces every collider on the coin to a trigger, loudly.
+    ///
+    /// This is not tidiness — a solid coin is a lethal coin. The CharacterController ignores triggers
+    /// when it moves, so OnTriggerEnter fires and OnControllerColliderHit never sees the coin. Leave one
+    /// solid and the controller collides with it instead: PlayerController's wall test asks only whether
+    /// the surface faces back down the lane and whether its top clears stepOffset, and a coin at chest
+    /// height answers yes to both. The run ends on a pickup.
+    ///
+    /// Reset covers a freshly added component and nothing else, so swapping the collider afterwards —
+    /// capsule for box, say — brings a solid one back with no warning. Hence a check at Awake.
+    /// </summary>
+    void ForceTrigger()
+    {
+        foreach (var collider in GetComponents<Collider>())
+        {
+            if (collider.isTrigger) continue;
+
+            collider.isTrigger = true;
+            Debug.LogWarning($"[Coin] '{name}' had a solid {collider.GetType().Name} — forced to a trigger. " +
+                             "A solid coin registers as a frontal wall and kills the run. Tick Is Trigger " +
+                             "on the prefab so this does not rely on a runtime fix.", this);
+        }
     }
 
     void Start()
     {
         // A one-time coin already banked on this save never appears again. Done in Start rather than
         // Awake so the wallet's first read happens after any scene-load bookkeeping.
-        if (!respawnsEachRun && CoinWallet.IsCollected(SceneName, coinId))
+        if (!respawnsEachRun && CoinWallet.IsCollected(type, SceneName, coinId))
             gameObject.SetActive(false);
     }
 
@@ -79,6 +106,31 @@ public class Coin : MonoBehaviour
         hoverFrequency = style.hoverFrequency;
         respawnsEachRun = style.respawnsEachRun;
         value = Mathf.Max(0, style.value);
+
+        ApplyMaterial();
+    }
+
+    /// <summary>
+    /// Puts this type's material on the coin, so the type dropdown is the only thing a level designer
+    /// touches — pick Special and it turns gold on the spot.
+    ///
+    /// Assigns sharedMaterial rather than material. The three materials are assets shared by every coin
+    /// of that type, which is what keeps them one place to tune; reading .material would mint a private
+    /// copy per coin and quietly cut each one off from CoinSettings.
+    /// </summary>
+    void ApplyMaterial()
+    {
+        var style = settings != null ? settings.For(type) : null;
+        if (style?.material == null) return;
+
+        var renderer = GetComponentInChildren<MeshRenderer>(true);
+        if (renderer == null || renderer.sharedMaterial == style.material) return;
+
+        renderer.sharedMaterial = style.material;
+
+#if UNITY_EDITOR
+        if (!Application.isPlaying) UnityEditor.EditorUtility.SetDirty(renderer);
+#endif
     }
 
     void Update()
@@ -107,7 +159,7 @@ public class Coin : MonoBehaviour
         taken = true;
 
         CoinWallet.Add(type, value);
-        if (!respawnsEachRun) CoinWallet.MarkCollected(SceneName, coinId);
+        if (!respawnsEachRun) CoinWallet.MarkCollected(type, SceneName, coinId);
 
         gameObject.SetActive(false);
     }
@@ -116,19 +168,32 @@ public class Coin : MonoBehaviour
 
 #if UNITY_EDITOR
     /// <summary>
-    /// Gives a newly placed coin an identity. Only scene instances get one — the prefab asset must
-    /// stay blank, or every coin dragged out of it would share the same id and the first one taken
-    /// would hide the rest.
+    /// Gives a newly placed coin an identity. Only coins living in a real, open scene get one — the
+    /// prefab assets must stay blank, or every coin dragged out of one would share the same id and the
+    /// first taken would hide the rest.
+    ///
+    /// The preview-scene test is what makes that true in practice. Editing a prefab asset in code goes
+    /// through PrefabUtility.LoadPrefabContents, which opens the prefab in a hidden preview scene — and
+    /// there the coin is NOT persistent and its scene IS valid, so the two checks below both pass and an
+    /// id gets minted straight into the asset on save. Measured: three variants came out carrying ids,
+    /// and blanking them by hand simply produced three new ones.
     /// </summary>
     void OnValidate()
     {
         if (string.IsNullOrEmpty(coinId)
             && !UnityEditor.EditorUtility.IsPersistent(this)
+            && !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewSceneObject(this)
             && gameObject.scene.IsValid())
         {
             coinId = System.Guid.NewGuid().ToString("N");
             UnityEditor.EditorUtility.SetDirty(this);
         }
+
+        // Material follows the type, immediately. This was briefly deferred through
+        // EditorApplication.delayCall out of caution about touching renderer state inside OnValidate —
+        // but delayCall needs an editor tick to fire, and measured, the swap simply never happened.
+        // Assigning a material reference is not one of the things OnValidate forbids, so it goes here.
+        ApplyMaterial();
     }
 #endif
 }

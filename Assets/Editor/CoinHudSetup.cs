@@ -52,8 +52,18 @@ static class CoinHudSetup
         UiBuild.SetRef(counter, "rows", hud.GetComponent<RectTransform>());
         UiBuild.SetRef(counter, "settings", AssetDatabase.LoadAssetAtPath<CoinSettings>(SettingsPath));
         UiBuild.SetRef(counter, "font", UiBuild.BuiltinFont());
-        // The run tally, not the lifetime pile — this is the number the player watches move.
+        // The run tally, not the lifetime pile — this is the number the player watches move. A lifetime
+        // total sitting at 340 barely twitches when a coin is taken, and the thing worth reading during
+        // a run is what this attempt has been worth.
         UiBuild.SetEnum(counter, "readout", (int)CoinCounter.Readout.Session);
+        UiBuild.SetEnum(counter, "alignment", (int)TextAnchor.MiddleLeft);
+        UiBuild.SetInt(counter, "fontSize", 30);
+        UiBuild.SetFloat(counter, "rowHeight", 36f);
+
+        // A row appears the moment its first coin is taken and flashes on every one after — the two
+        // things that make a change legible to someone whose eyes are on the road, not the corner.
+        UiBuild.SetBool(counter, "hideUntilEarned", true);
+        UiBuild.SetBool(counter, "pulseOnGain", true);
 
         Undo.CollapseUndoOperations(group);
         var scene = EditorSceneManager.GetActiveScene();
