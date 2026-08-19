@@ -36,6 +36,8 @@ static class MenuSetup
     static readonly Color DevWipeColor = new Color(0.52f, 0.24f, 0.22f, 0.95f);
 
     const string CoinSettingsPath = "Assets/Settings/CoinSettings.asset";
+    const string CatalogPath = "Assets/Shop/ShopCatalog.asset";
+    const string ExitIconPath = "Assets/Images/poower.png";
 
     // ControlsPanel overwrites the window colour as soon as a rebind starts; these are what the
     // scene shows at rest.
@@ -96,6 +98,8 @@ static class MenuSetup
         UiBuild.SetRef(controller, "devPanel", dev);
         UiBuild.SetRef(controller, "levelList", levelList);
         UiBuild.SetRef(controller, "levelButtonFont", UiBuild.BuiltinFont());
+        // Re-wired every run so a re-setup cannot silently drop the gate and leave every level open.
+        UiBuild.SetRef(controller, "catalog", LoadCatalog());
 
         // What the designer sees when the scene opens. MenuController.Start repeats this.
         main.SetActive(true);
@@ -104,6 +108,8 @@ static class MenuSetup
         controls.SetActive(false);
         shop.SetActive(false);
         dev.SetActive(false);
+
+        WarnUnclickable(canvas.transform);
 
         Undo.CollapseUndoOperations(group);
         var scene = EditorSceneManager.GetActiveScene();
@@ -213,8 +219,8 @@ static class MenuSetup
     /// </summary>
     static Button BuildExitButton(Transform panel, MenuController controller)
     {
-        var go = UiBuild.Child(panel, "ExitButton");
-        UiBuild.Place(go, ExitMin, ExitMax);
+        var go = UiBuild.Child(panel, "ExitButton", out bool newButton);
+        UiBuild.PlaceNew(go, newButton, ExitMin, ExitMax);
 
         var image = go.GetComponent<Image>();
         if (image == null) image = Undo.AddComponent<Image>(go);
@@ -225,9 +231,10 @@ static class MenuSetup
         if (button == null) button = Undo.AddComponent<Button>(go);
         Undo.RecordObject(button, "Configure ExitButton");
         button.targetGraphic = image;
+        UiBuild.AddPressFeedback(go);
 
-        var iconGo = UiBuild.Child(go.transform, "Icon");
-        UiBuild.Place(iconGo, new Vector2(IconPad, 0.14f), new Vector2(IconPad + IconWidth, 0.86f));
+        var iconGo = UiBuild.Child(go.transform, "Icon", out bool newIcon);
+        UiBuild.PlaceNew(iconGo, newIcon, new Vector2(IconPad, 0.14f), new Vector2(IconPad + IconWidth, 0.86f));
         var icon = iconGo.GetComponent<Image>();
         if (icon == null) icon = Undo.AddComponent<Image>(iconGo);
         Undo.RecordObject(icon, "Configure ExitButton Icon");
@@ -237,6 +244,17 @@ static class MenuSetup
         // The click belongs to the box underneath. An icon that swallowed it would leave a dead spot
         // in the middle of the control.
         icon.raycastTarget = false;
+
+        // Only assigned when the artwork is actually there. A missing file leaves the spriteless
+        // white box the button shipped with rather than failing the whole setup, and an icon already
+        // dropped in by hand is left alone.
+        var art = AssetDatabase.LoadAssetAtPath<Sprite>(ExitIconPath);
+        if (art != null)
+        {
+            icon.sprite = art;
+            // White: an Image tints its sprite by this, and the placeholder colour would stain it.
+            icon.color = Color.white;
+        }
 
         // Left-aligned, because the caption starts where the icon ends. Centring it in the leftover
         // space would leave the gap between icon and text changing width with the wording.
@@ -258,8 +276,8 @@ static class MenuSetup
         Transform parent, string name, Vector2 anchorMin, Vector2 anchorMax,
         CoinCounter.Readout readout, TextAnchor alignment, int fontSize, float rowHeight, float spacing)
     {
-        var go = UiBuild.Child(parent, name);
-        UiBuild.Place(go, anchorMin, anchorMax);
+        var go = UiBuild.Child(parent, name, out bool newRow);
+        UiBuild.PlaceNew(go, newRow, anchorMin, anchorMax);
 
         var layout = go.GetComponent<VerticalLayoutGroup>();
         if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(go);
@@ -300,24 +318,29 @@ static class MenuSetup
 
         UiBuild.Label(panel.transform, "Header", "COIN DEV TOOLS", HeaderMin, HeaderMax, 48);
         UiBuild.Label(panel.transform, "Warning",
-            "Wipes saved coin progress on this device. Each button asks twice.",
-            new Vector2(0.12f, 0.43f), new Vector2(0.88f, 0.49f), 26, WarnText);
+            "Wipes saved progress on this device. Each button asks twice.",
+            new Vector2(0.12f, 0.45f), new Vector2(0.88f, 0.50f), 26, WarnText);
 
         var status = UiBuild.Label(panel.transform, "Status", "",
-            new Vector2(0.20f, 0.30f), new Vector2(0.80f, 0.42f), 26, MutedText);
+            new Vector2(0.20f, 0.31f), new Vector2(0.80f, 0.44f), 26, MutedText);
 
         var permanent = UiBuild.MakeButton(panel.transform, "ResetPermanentButton", "RESET PERMANENT",
-            new Vector2(0.28f, 0.23f), new Vector2(0.72f, 0.29f), DevColor, 30);
+            new Vector2(0.28f, 0.245f), new Vector2(0.72f, 0.30f), DevColor, 30);
         var special = UiBuild.MakeButton(panel.transform, "ResetSpecialButton", "RESET SPECIAL",
-            new Vector2(0.28f, 0.16f), new Vector2(0.72f, 0.22f), DevColor, 30);
-        var everything = UiBuild.MakeButton(panel.transform, "ResetAllButton", "RESET ALL COINS",
-            new Vector2(0.28f, 0.09f), new Vector2(0.72f, 0.15f), DevWipeColor, 30);
+            new Vector2(0.28f, 0.185f), new Vector2(0.72f, 0.24f), DevColor, 30);
+        // Purchases only, and pointedly not the coins — see CoinDevPanel.Request for why that is the
+        // useful shape when testing a shop.
+        var unlocks = UiBuild.MakeButton(panel.transform, "ResetUnlocksButton", "RESET UNLOCKS",
+            new Vector2(0.28f, 0.125f), new Vector2(0.72f, 0.18f), DevColor, 30);
+        var everything = UiBuild.MakeButton(panel.transform, "ResetAllButton", "RESET ALL PROGRESS",
+            new Vector2(0.28f, 0.065f), new Vector2(0.72f, 0.12f), DevWipeColor, 30);
 
         var devPanel = panel.GetComponent<CoinDevPanel>();
         if (devPanel == null) devPanel = Undo.AddComponent<CoinDevPanel>(panel);
 
         UiBuild.Bind(permanent, devPanel.ResetPermanent);
         UiBuild.Bind(special, devPanel.ResetSpecial);
+        UiBuild.Bind(unlocks, devPanel.ResetUnlocks);
         UiBuild.Bind(everything, devPanel.ResetEverything);
 
         UiBuild.SetRef(devPanel, "status", status);
@@ -325,17 +348,21 @@ static class MenuSetup
 
         // Back to Options, where the button that opens this lives.
         var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK",
-            new Vector2(0.40f, 0.01f), new Vector2(0.60f, 0.07f), BackColor, 30);
+            new Vector2(0.40f, 0.005f), new Vector2(0.60f, 0.06f), BackColor, 30);
         UiBuild.Bind(back, controller.ShowOptions);
         return panel;
     }
 
     /// <summary>
-    /// Unlocks live here once they exist. Until then the panel carries the disclaimer and the coin
-    /// balances, so the currency the player is accumulating is at least visible somewhere.
+    /// The shop itself: the lifetime balances, and one row per catalogue entry built at runtime by
+    /// ShopScreen.
     ///
-    /// The balances are a CoinCounter rather than hand-built labels, which is the same component the
-    /// in-run HUD uses — a fourth coin type would appear in both without touching either.
+    /// The rows are not placed here on purpose. What is for sale is a catalogue asset, so the row
+    /// count has to follow it — placing them by hand would mean this command needed re-running every
+    /// time an item was added, and a stale scene would quietly stop showing something for sale.
+    ///
+    /// The balances are a CoinCounter, the same component the in-run HUD uses, sitting top-right in
+    /// the same band as the main menu's strip so the two screens agree about where money lives.
     /// </summary>
     static GameObject BuildShopPanel(Transform canvas, MenuController controller)
     {
@@ -343,20 +370,104 @@ static class MenuSetup
         UiBuild.Place(panel, Vector2.zero, Vector2.one);
 
         UiBuild.Label(panel.transform, "Header", "SHOP", HeaderMin, HeaderMax, 56);
-        UiBuild.Label(panel.transform, "Notice", "IN DEVELOPMENT",
-            new Vector2(0.15f, 0.42f), new Vector2(0.85f, 0.49f), 40, WarnText);
-        UiBuild.Label(panel.transform, "Blurb", "Unlocks are not built yet. Coins you collect are " +
-                      "being saved and will spend here.",
-            new Vector2(0.12f, 0.34f), new Vector2(0.88f, 0.41f), 28, MutedText);
 
-        // Lifetime totals here — this is the pile unlocks will spend from.
+        // The placeholder screen's copy. Every builder here is find-or-create, which never removes
+        // what it has stopped making — so a scene built before the shop existed keeps an "IN
+        // DEVELOPMENT" banner sitting across the new rows until something deletes it by name.
+        Remove(panel.transform, "Notice");
+        Remove(panel.transform, "Blurb");
+
         BuildBalances(panel.transform, "Balances",
-            new Vector2(0.34f, 0.19f), new Vector2(0.66f, 0.33f),
-            CoinCounter.Readout.Total, TextAnchor.MiddleCenter, fontSize: 34, rowHeight: 44f, spacing: 6f);
+            new Vector2(0.64f, 0.86f), new Vector2(0.98f, 0.99f),
+            CoinCounter.Readout.Total, TextAnchor.MiddleRight, fontSize: 26, rowHeight: 30f, spacing: 2f);
+
+        var listGo = UiBuild.Child(panel.transform, "ItemList", out bool newList);
+        var itemList = UiBuild.PlaceNew(listGo, newList, new Vector2(0.08f, 0.20f), new Vector2(0.92f, 0.48f));
+
+        var layout = listGo.GetComponent<VerticalLayoutGroup>();
+        if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(listGo);
+        Undo.RecordObject(layout, "Configure ItemList");
+        layout.spacing = 12f;
+        layout.childAlignment = TextAnchor.UpperCenter;
+        layout.childControlWidth = true;
+        // On, so the LayoutElement each row carries is what decides its height. Off, a stretched row
+        // would collapse to the zero sizeDelta stretching leaves behind.
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        // Sits in the same band as the list and is switched off by ShopScreen the moment there is
+        // anything to show, so an empty catalogue reads as empty rather than as broken.
+        var empty = UiBuild.Label(panel.transform, "EmptyNotice",
+            "Nothing for sale yet. Add items to the shop catalogue.",
+            new Vector2(0.12f, 0.30f), new Vector2(0.88f, 0.38f), 28, MutedText);
+
+        var screen = panel.GetComponent<ShopScreen>();
+        if (screen == null) screen = Undo.AddComponent<ShopScreen>(panel);
+
+        UiBuild.SetRef(screen, "catalog", LoadCatalog());
+        UiBuild.SetRef(screen, "rows", itemList);
+        UiBuild.SetRef(screen, "emptyNotice", empty);
+        UiBuild.SetRef(screen, "font", UiBuild.BuiltinFont());
 
         var back = UiBuild.MakeButton(panel.transform, "BackButton", "BACK", BackMin, BackMax, BackColor, 40);
         UiBuild.Bind(back, controller.ShowMain);
         return panel;
+    }
+
+    /// <summary>
+    /// Reports any button a player could never actually press.
+    ///
+    /// A Button is only clickable through a Graphic the raycaster can hit, and a Graphic that is
+    /// disabled, missing, or has raycastTarget off is hit by nothing. None of that shows in the
+    /// hierarchy, none of it errors, and the onClick wiring still looks perfect in the inspector —
+    /// invoking it from code even works. The Exit button sat dead in the editor and in a build
+    /// because its Image had been unticked, presumably to hide the box behind the icon.
+    ///
+    /// An alpha of zero is fine and not reported: raycastTarget is independent of colour, so an
+    /// invisible Image is still a full-rect hit area. That is the way to have a button with no
+    /// visible background.
+    /// </summary>
+    static void WarnUnclickable(Transform canvas)
+    {
+        foreach (var button in canvas.GetComponentsInChildren<Button>(true))
+        {
+            var graphic = button.targetGraphic;
+
+            string fault =
+                graphic == null ? "no Target Graphic" :
+                !graphic.enabled ? $"its Target Graphic ({graphic.GetType().Name}) is disabled" :
+                !graphic.raycastTarget ? "its Target Graphic has Raycast Target off" :
+                null;
+
+            if (fault == null) continue;
+
+            Debug.LogWarning($"[MenuSetup] '{button.name}' cannot be clicked — {fault}. The onClick " +
+                             $"wiring is fine; nothing can reach it. For a button with no visible " +
+                             $"background, keep the Image enabled and set its colour alpha to 0.",
+                             button);
+        }
+    }
+
+    /// <summary>Deletes a child by name if it is still there. Undo-registered, like everything else here.</summary>
+    static void Remove(Transform parent, string name)
+    {
+        var child = parent.Find(name);
+        if (child != null) Undo.DestroyObjectImmediate(child.gameObject);
+    }
+
+    /// <summary>
+    /// The catalogue asset, or null with a warning. Not an error: a project that has not authored one
+    /// yet is a legitimate state, and both MenuController and ShopScreen handle a null by behaving as
+    /// though nothing is gated and nothing is for sale.
+    /// </summary>
+    static ShopCatalog LoadCatalog()
+    {
+        var catalog = AssetDatabase.LoadAssetAtPath<ShopCatalog>(CatalogPath);
+        if (catalog == null)
+            Debug.LogWarning($"[MenuSetup] No shop catalogue at {CatalogPath}. The shop will show its " +
+                             $"empty notice and every level will count as unlocked.");
+        return catalog;
     }
 
     static GameObject BuildLevelSelectPanel(
@@ -367,8 +478,8 @@ static class MenuSetup
 
         UiBuild.Label(panel.transform, "Header", "SELECT LEVEL", HeaderMin, HeaderMax, 48);
 
-        var listGo = UiBuild.Child(panel.transform, "LevelList");
-        levelList = UiBuild.Place(listGo, new Vector2(0.34f, 0.22f), new Vector2(0.66f, 0.48f));
+        var listGo = UiBuild.Child(panel.transform, "LevelList", out bool newList);
+        levelList = UiBuild.PlaceNew(listGo, newList, new Vector2(0.34f, 0.22f), new Vector2(0.66f, 0.48f));
 
         // MenuController spawns one button per unlocked level into this at runtime, so the
         // layout group is what gives them a size and a stacking order.
@@ -433,8 +544,8 @@ static class MenuSetup
 
         UiBuild.Label(panel.transform, "Header", "CONTROLS", HeaderMin, HeaderMax, 48);
 
-        var rowsGo = UiBuild.Child(panel.transform, "Rows");
-        var rows = UiBuild.Place(rowsGo, new Vector2(0.2f, 0.27f), new Vector2(0.8f, 0.48f));
+        var rowsGo = UiBuild.Child(panel.transform, "Rows", out bool newRows);
+        var rows = UiBuild.PlaceNew(rowsGo, newRows, new Vector2(0.2f, 0.27f), new Vector2(0.8f, 0.48f));
 
         var layout = rowsGo.GetComponent<VerticalLayoutGroup>();
         if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(rowsGo);
@@ -484,8 +595,8 @@ static class MenuSetup
         backdrop.color = PromptBackdrop;
         backdrop.raycastTarget = true;
 
-        var windowGo = UiBuild.Child(listener.transform, "Window");
-        UiBuild.Place(windowGo, new Vector2(0.22f, 0.38f), new Vector2(0.78f, 0.62f));
+        var windowGo = UiBuild.Child(listener.transform, "Window", out bool newWindow);
+        UiBuild.PlaceNew(windowGo, newWindow, new Vector2(0.22f, 0.38f), new Vector2(0.78f, 0.62f));
         window = windowGo.GetComponent<Image>();
         if (window == null) window = Undo.AddComponent<Image>(windowGo);
         Undo.RecordObject(window, "Configure Window");
@@ -501,11 +612,22 @@ static class MenuSetup
     }
 
     /// <summary>Re-anchors an already-built button without touching its colour or label.</summary>
+    /// <summary>
+    /// Makes sure a control that was already in the scene has a Button, and leaves it exactly where
+    /// it is.
+    ///
+    /// This only ever runs against the hand-placed PlayButton, which by definition someone
+    /// positioned deliberately. It used to re-anchor it on every run, so each pass of Set Up Start
+    /// Menu dragged Play back to the constants in this file and threw the placement away.
+    ///
+    /// The anchors are still taken so the call sites read the same as the ones that do place, and so
+    /// there is somewhere obvious to put them back if this ever has to build the button itself.
+    /// </summary>
     static Button Configure(GameObject go, Vector2 anchorMin, Vector2 anchorMax)
     {
-        UiBuild.Place(go, anchorMin, anchorMax);
         var button = go.GetComponent<Button>();
         if (button == null) button = Undo.AddComponent<Button>(go);
+        UiBuild.AddPressFeedback(go);
         return button;
     }
 

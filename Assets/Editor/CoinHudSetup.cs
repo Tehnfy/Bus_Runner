@@ -35,8 +35,8 @@ static class CoinHudSetup
         Undo.SetCurrentGroupName("Set Up Coin HUD");
         int group = Undo.GetCurrentGroup();
 
-        var hud = UiBuild.Child(canvas.transform, HudName);
-        UiBuild.Place(hud, HudMin, HudMax);
+        var hud = UiBuild.Child(canvas.transform, HudName, out bool newHud);
+        UiBuild.PlaceNew(hud, newHud, HudMin, HudMax);
 
         var layout = hud.GetComponent<VerticalLayoutGroup>();
         if (layout == null) layout = Undo.AddComponent<VerticalLayoutGroup>(hud);

@@ -39,7 +39,7 @@ public class CoinDevPanel : MonoBehaviour
 
     // Which wipe is armed, and until when. Every button here throws away progress the tester may have
     // spent a run collecting, so the first press asks and the second acts.
-    enum Pending { None, Permanent, Special, Everything }
+    enum Pending { None, Permanent, Special, Unlocks, Everything }
 
     Pending armed = Pending.None;
     float armedUntil;
@@ -97,6 +97,10 @@ public class CoinDevPanel : MonoBehaviour
     // Wired to the buttons by MenuSetup.
     public void ResetPermanent() => Request(Pending.Permanent);
     public void ResetSpecial() => Request(Pending.Special);
+
+    /// <summary>Everything bought — powers, level unlocks and consumable stocks. Coins are left alone.</summary>
+    public void ResetUnlocks() => Request(Pending.Unlocks);
+
     public void ResetEverything() => Request(Pending.Everything);
 
     void Request(Pending action)
@@ -120,27 +124,37 @@ public class CoinDevPanel : MonoBehaviour
             case Pending.Special:
                 cleared = CoinWallet.ResetType(CoinType.Special);
                 break;
+            case Pending.Unlocks:
+                // Coins deliberately untouched. Wiping what was bought without refunding what it cost
+                // is the useful shape for testing a shop: the tester keeps the balance they earned and
+                // gets to make the purchase again.
+                cleared = PlayerInventory.ResetAll();
+                break;
             default:
-                cleared = CoinWallet.ResetAll();
+                // Everything means everything. Clearing the coins but leaving the purchases behind
+                // would read as a wipe that quietly kept half the save.
+                cleared = CoinWallet.ResetAll() + PlayerInventory.ResetAll();
                 break;
         }
 
-        Debug.Log($"[CoinDevPanel] Reset {Name(action)} — {cleared} collected mark(s) cleared, " +
-                  "balance(s) zeroed. Reload the level to see the coins back.");
-        Report($"{Name(action)} RESET — {cleared} COIN(S) BACK IN PLAY. RELOAD THE LEVEL.");
+        Debug.Log($"[CoinDevPanel] Reset {Name(action)} — {cleared} record(s) cleared. " +
+                  "Reload the level to see any coins back.");
+        Report($"{Name(action)} RESET — {cleared} RECORD(S) CLEARED. RELOAD THE LEVEL.");
     }
 
     static string Name(Pending action) => action switch
     {
         Pending.Permanent => "PERMANENT",
         Pending.Special => "SPECIAL",
-        Pending.Everything => "ALL COINS",
+        Pending.Unlocks => "UNLOCKS",
+        Pending.Everything => "ALL PROGRESS",
         _ => "NOTHING",
     };
 
     /// <summary>
-    /// Balance and taken-count per type. The taken count comes from the wallet's own index, so it
-    /// reports what a reset would actually be able to clear rather than what is in the level.
+    /// Balance and taken-count per type, then what has been bought. Both counts come from the index
+    /// each system keeps, so they report what a reset would actually be able to clear rather than
+    /// what happens to be in the level or the catalogue.
     /// </summary>
     void ShowState()
     {
@@ -154,6 +168,9 @@ public class CoinDevPanel : MonoBehaviour
                 text.Append("   taken ").Append(CoinWallet.CollectedCount(type));
             text.Append('\n');
         }
+
+        text.Append("owned ").Append(PlayerInventory.OwnedIds().Length)
+            .Append("   stocked ").Append(PlayerInventory.StockedIds().Length);
 
         status.text = text.ToString().TrimEnd();
     }

@@ -64,20 +64,54 @@ static class UiBuild
     public static TMP_FontAsset BuiltinFont() => UiRect.ResolveFont(null, "UiBuild");
 
     /// <summary>Find-or-create a child by name, always carrying a RectTransform.</summary>
-    public static GameObject Child(Transform parent, string name)
+    public static GameObject Child(Transform parent, string name) => Child(parent, name, out _);
+
+    /// <summary>
+    /// Find-or-create a child, reporting which it was.
+    ///
+    /// <paramref name="created"/> is what lets a re-run tell "I am building this" from "this was
+    /// already here" — and therefore lets it configure a control without moving one somebody has
+    /// since positioned by hand. See <see cref="PlaceNew"/>.
+    /// </summary>
+    public static GameObject Child(Transform parent, string name, out bool created)
     {
         var existing = parent.Find(name);
-        if (existing != null) return existing.gameObject;
+        if (existing != null)
+        {
+            created = false;
+            return existing.gameObject;
+        }
 
         var go = new GameObject(name, typeof(RectTransform));
         Undo.RegisterCreatedObjectUndo(go, "Create " + name);
         Undo.SetTransformParent(go.transform, parent, "Parent " + name);
         go.transform.localScale = Vector3.one;
         go.transform.localRotation = Quaternion.identity;
+        created = true;
         return go;
     }
 
-    /// <summary>Anchors a rect to a fraction of its parent with no offsets.</summary>
+    /// <summary>
+    /// The layout in this file is the *initial* layout, not an enforced one.
+    ///
+    /// Places <paramref name="go"/> only when it was just created; an object that already existed
+    /// keeps whatever position it has. Anything else makes re-running a setup command hostile — the
+    /// commands are advertised as safe to re-run, and they were quietly dragging every control back
+    /// to the constants here, discarding hand-placement each time. Play was the obvious casualty
+    /// because it is the one control that predates this file.
+    ///
+    /// Returns the rect either way, so a caller that needs it does not have to care which happened.
+    /// </summary>
+    public static RectTransform PlaceNew(GameObject go, bool created, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        return created ? Place(go, anchorMin, anchorMax) : go.GetComponent<RectTransform>();
+    }
+
+    /// <summary>
+    /// Anchors a rect to a fraction of its parent with no offsets. Unconditional — callers that
+    /// should respect hand-placement want <see cref="PlaceNew"/> instead. Still the right call for a
+    /// full-bleed panel, which has to fill its canvas to work at all and is never positioned by hand.
+    /// </summary>
     public static RectTransform Place(GameObject go, Vector2 anchorMin, Vector2 anchorMax)
     {
         var rect = go.GetComponent<RectTransform>();
@@ -102,8 +136,8 @@ static class UiBuild
         Transform parent, string name, string content, Vector2 anchorMin, Vector2 anchorMax,
         int fontSize, Color? color = null, TextAnchor anchor = TextAnchor.MiddleCenter)
     {
-        var go = Child(parent, name);
-        Place(go, anchorMin, anchorMax);
+        var go = Child(parent, name, out bool created);
+        PlaceNew(go, created, anchorMin, anchorMax);
 
         var legacy = go.GetComponent<Text>();
         if (legacy != null) Undo.DestroyObjectImmediate(legacy);
@@ -126,8 +160,8 @@ static class UiBuild
         Transform parent, string name, string label, Vector2 anchorMin, Vector2 anchorMax,
         Color color, int fontSize)
     {
-        var go = Child(parent, name);
-        Place(go, anchorMin, anchorMax);
+        var go = Child(parent, name, out bool created);
+        PlaceNew(go, created, anchorMin, anchorMax);
 
         var image = go.GetComponent<Image>();
         if (image == null) image = Undo.AddComponent<Image>(go);
@@ -139,8 +173,22 @@ static class UiBuild
         Undo.RecordObject(button, "Configure " + name);
         button.targetGraphic = image;
 
+        AddPressFeedback(go);
+
         Label(go.transform, "Label", label, Vector2.zero, Vector2.one, fontSize);
         return button;
+    }
+
+    /// <summary>
+    /// Gives a control the placeholder press flash, if it has not got one already.
+    ///
+    /// Added by the builder rather than by hand so every control in every menu behaves the same, and
+    /// so deleting the feedback later is one line here plus one script — not a hunt through the
+    /// scene for the buttons that happened to get it.
+    /// </summary>
+    public static void AddPressFeedback(GameObject go)
+    {
+        if (go.GetComponent<PressBorder>() == null) Undo.AddComponent<PressBorder>(go);
     }
 
     /// <summary>

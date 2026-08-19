@@ -42,11 +42,45 @@ public class MenuController : MonoBehaviour
     const int LevelButtonFontSize = 44;
     const float LevelButtonHeight = 96f;
 
+    [Tooltip("Everything for sale, and what the player owns of it. Leave empty and every level is " +
+             "open — which is what a project with no unlocks authored yet wants.")]
+    [SerializeField] ShopCatalog catalog;
+
     /// <summary>
-    /// How many entries of levelScenes the player is allowed to start. Unlock logic
-    /// lands here later; for now the whole list is open.
+    /// How far along levelScenes the player may start.
+    ///
+    /// A prefix count rather than a set, because that is what both callers want: Play starts the
+    /// furthest entry, and the level list shows the first this many. A level bought out of order
+    /// therefore does not open the ones before it — buy the gate, not the destination.
+    ///
+    /// A scene the catalogue does not gate counts as open. That default is what keeps a project
+    /// with no unlocks authored yet behaving exactly as it did before any of this existed.
     /// </summary>
-    public int UnlockedCount => levelScenes.Length;
+    public int UnlockedCount
+    {
+        get
+        {
+            if (catalog == null) return levelScenes.Length;
+
+            int open = 0;
+            foreach (var scene in levelScenes)
+            {
+                if (!IsUnlocked(scene)) break;
+                open++;
+            }
+
+            // Never zero. A player who owns nothing still has to be able to start the game, and the
+            // alternative is a menu with no way into it — see the first entry being ungated.
+            return Mathf.Max(1, open);
+        }
+    }
+
+    /// <summary>Whether this level may be started: either not gated at all, or gated and bought.</summary>
+    public bool IsUnlocked(string sceneName)
+    {
+        if (catalog == null || !catalog.IsGated(sceneName)) return true;
+        return catalog.UnlockedScenes().Contains(sceneName);
+    }
 
     void Start()
     {
@@ -101,6 +135,15 @@ public class MenuController : MonoBehaviour
             Debug.LogError($"[MenuController] Level index {index} is outside levelScenes (length {levelScenes.Length}).");
             return;
         }
+        // Checked here rather than only where the buttons are built. This is public and reachable
+        // from a button someone wires by hand, and a locked level loading anyway would make the gate
+        // decorative.
+        if (!IsUnlocked(levelScenes[index]))
+        {
+            Debug.LogWarning($"[MenuController] '{levelScenes[index]}' is locked — not loading it.");
+            return;
+        }
+
         Time.timeScale = 1f;
         SceneManager.LoadScene(levelScenes[index], LoadSceneMode.Single);
     }
@@ -118,6 +161,11 @@ public class MenuController : MonoBehaviour
     /// </summary>
     public void QuitGame()
     {
+        // Logged before either branch runs. In the editor the next line ends play mode, and in a
+        // build Application.Quit tears the process down — so anything logged afterwards would be
+        // written during shutdown, when it may never reach the console at all.
+        Debug.Log("[MenuController] Exit pressed — quitting.");
+
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
