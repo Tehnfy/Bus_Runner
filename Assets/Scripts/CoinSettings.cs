@@ -42,6 +42,14 @@ public class CoinSettings : ScriptableObject
         public bool respawnsEachRun;
         [Tooltip("Added to this type's balance per coin.")]
         public int value = 1;
+
+        [Tooltip("Spawned where the coin was when it is collected. Per type rather than per coin, " +
+                 "so it sits beside the colours it should match and all coins of a type agree. " +
+                 "Empty means no effect.")]
+        public GameObject pickupEffect;
+
+        [Tooltip("Seconds before the pickup effect is destroyed.")]
+        public float pickupEffectLifetime = 1f;
     }
 
     [SerializeField]

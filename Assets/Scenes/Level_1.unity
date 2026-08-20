@@ -1235,6 +1235,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -2139,6 +2143,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -3003,6 +3011,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -4608,7 +4620,7 @@ Light:
   m_RenderMode: 0
   m_CullingMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 4294967231
   m_RenderingLayerMask: 1
   m_Lightmapping: 1
   m_LightShadowCasterMode: 0
@@ -5779,6 +5791,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -6227,6 +6243,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -9345,6 +9365,8 @@ MonoBehaviour:
   slideHandPalmOffset: 0.04
   slideHandReachLimit: 0.99
   slideHandSmoothTime: 0.09
+  defaultCrashEffect: {fileID: 0}
+  defaultCrashEffectLifetime: 1.2
   rollAirTime: 0.9
   rollInputLockDuration: 0.08
   rollDurationFallback: 1.7
@@ -9675,6 +9697,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -11076,6 +11102,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -12245,6 +12275,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -12881,6 +12915,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -14939,6 +14977,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -15327,6 +15369,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -15825,6 +15871,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -16188,6 +16238,10 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 5996214722599393841, guid: 755bad51733046d45a5795bdcc519d48, type: 3}
+      propertyPath: effectPrefab
+      value: 
+      objectReference: {fileID: 4648103334201988451, guid: d99b6e3fe96d7d945a1b06818585bd1e, type: 3}
     - target: {fileID: 6346023018302479357, guid: 755bad51733046d45a5795bdcc519d48, type: 3}
       propertyPath: m_Name
       value: SlideGate_x84
@@ -17219,6 +17273,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -19491,6 +19549,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -20427,6 +20489,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -20968,6 +21034,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -22228,6 +22298,10 @@ PrefabInstance:
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_BounceIntensity
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
@@ -25613,6 +25687,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -25781,6 +25859,10 @@ PrefabInstance:
       value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+      propertyPath: m_CullingMask.m_Bits
+      value: 4294967231
+      objectReference: {fileID: 0}
+    - target: {fileID: 572479767709794754, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
       propertyPath: m_UseColorTemperature
       value: 0
       objectReference: {fileID: 0}
@@ -25797,10 +25879,68 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 45b882cb61401c1488f66aa10450df12, type: 3}
+--- !u!1001 &6350741586772713284
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 20.169
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 1.154
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0.047
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: -0.7071068
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: -90
+      objectReference: {fileID: 0}
+    - target: {fileID: 1226133278098226595, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 9073474580932332494, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
+      propertyPath: m_Name
+      value: Metal_Crash
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 5070cf1eeb0c8c449880504d9c31e614, type: 3}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
+  - {fileID: 6350741586772713284}
   - {fileID: 330585546}
   - {fileID: 132559196}
   - {fileID: 1303592284}

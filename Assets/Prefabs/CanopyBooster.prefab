@@ -101,6 +101,7 @@ GameObject:
   - component: {fileID: 6839471517762973928}
   - component: {fileID: 6529379745644316240}
   - component: {fileID: 6727104489263856663}
+  - component: {fileID: 9016220648030965947}
   m_Layer: 0
   m_Name: CanopyBooster
   m_TagString: Untagged
@@ -160,3 +161,22 @@ MonoBehaviour:
   bounceHeight: 5
   topNormalThreshold: 0.5
   retriggerDelay: 0.25
+--- !u!114 &9016220648030965947
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6063725689369510529}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b6ad2c6d3fb3be24ca65d1918a9b9872, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HitEffect
+  effectPrefab: {fileID: 0}
+  lifetime: 1.2
+  retriggerDelay: 0.25
+  placeholderColor: {r: 0.4, g: 1, b: 0.55, a: 1}
+  placeholderCount: 10
+  placeholderSpeed: 6
+  placeholderSize: 0.12

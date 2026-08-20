@@ -16,6 +16,12 @@ public class FinishLine : MonoBehaviour
     void OnTriggerEnter(Collider other)
     {
         if (!other.CompareTag("Player")) return;
+
+        // At the player rather than at the line: the trigger volume is deliberately tall and long,
+        // so its own centre can be metres from wherever the runner actually crossed.
+        var effect = GetComponent<HitEffect>();
+        if (effect != null) effect.TryPlay(other.transform.position, Vector3.up);
+
         if (RunManager.Instance != null) RunManager.Instance.Finish();
     }
 }

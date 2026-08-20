@@ -130,6 +130,14 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Approach time for the hand correction, so it eases in and out with the slide.")]
     [SerializeField] float slideHandSmoothTime = 0.09f;
 
+    [Header("Impact effects")]
+    [Tooltip("Fallback effect for a fatal crash into something with no HitEffect component of its " +
+             "own. Left empty on purpose: an effect on every obstacle is the opposite of specific " +
+             "things reacting. Wire it only if you want a house-style crash burst everywhere.")]
+    [SerializeField] GameObject defaultCrashEffect;
+    [Tooltip("Seconds before the fallback crash effect is destroyed.")]
+    [SerializeField] float defaultCrashEffectLifetime = 1.2f;
+
     [Header("Landing roll")]
     [Tooltip("Airborne at least this long and the landing becomes a roll. A plain jump is only ~0.67s " +
              "in the air, so this fires on drops off rooftops rather than on every hop.")]
@@ -1320,6 +1328,9 @@ public class PlayerController : MonoBehaviour
             var canopy = hit.collider.GetComponentInParent<CanopyBooster>();
             if (canopy != null && canopy.TryConsumeBounce(hit.normal))
             {
+                // Played through the booster's own once-per-touchdown gate, which has already been
+                // claimed above — so this needs no retrigger window of its own.
+                PlayHitEffect(hit, gated: false);
                 Bounce(canopy.BounceHeight);
                 return;
             }
@@ -1333,9 +1344,38 @@ public class PlayerController : MonoBehaviour
         float surfaceTop = hit.collider.bounds.max.y;
         if (surfaceTop - feetY <= cc.stepOffset + ledgeTolerance) return;
 
+        // Before Kill, not after. Kill drops control and hands the body to the ragdoll, and this is
+        // the only place that still holds the contact point the effect has to appear at.
+        PlayHitEffect(hit, gated: true);
+
         // The normal goes with it: it points out of the wall, which is the direction to throw the
         // body, and only this method knows it.
         if (RunManager.Instance != null) RunManager.Instance.Kill(hit.normal);
+    }
+
+    /// <summary>
+    /// Asks whatever was just hit to show its own impact effect, if it has one.
+    ///
+    /// The effect belongs to the obstacle, exactly as the bounce decision belongs to CanopyBooster —
+    /// so a building can throw dust and a lamp post can spark with nothing here to edit. Silence is
+    /// the correct outcome for anything without a HitEffect: the point is that specific things react.
+    ///
+    /// GetComponentInParent because the collider may be a child of the prefab root, and it is
+    /// reached only after the cheaper tests above have already decided this contact matters — the
+    /// same reason the canopy lookup sits behind its normal check.
+    /// </summary>
+    void PlayHitEffect(ControllerColliderHit hit, bool gated)
+    {
+        var effect = hit.collider.GetComponentInParent<HitEffect>();
+        if (effect == null)
+        {
+            if (defaultCrashEffect != null && gated)
+                HitEffects.Spawn(defaultCrashEffect, hit.point, hit.normal, defaultCrashEffectLifetime);
+            return;
+        }
+
+        if (gated) effect.TryPlay(hit.point, hit.normal);
+        else effect.Play(hit.point, hit.normal);
     }
 
     /// <summary>

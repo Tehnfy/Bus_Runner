@@ -161,7 +161,37 @@ public class Coin : MonoBehaviour
         CoinWallet.Add(type, value);
         if (!respawnsEachRun) CoinWallet.MarkCollected(type, SceneName, coinId);
 
+        // Before the coin switches itself off, while its position is still the right place to put
+        // the effect. Spawned unparented by HitEffects, so deactivating the coin cannot take the
+        // burst with it. Vector3.up rather than a contact normal: a pickup has no impact face, and a
+        // burst that rises reads as collected rather than as hit.
+        PlayPickupEffect();
+
         gameObject.SetActive(false);
+    }
+
+    /// <summary>
+    /// The pickup burst for this coin's type, if the settings asset defines one. Silent without a
+    /// CoinSettings, like every other visual on this component.
+    /// </summary>
+    void PlayPickupEffect()
+    {
+        var style = settings != null ? settings.For(type) : null;
+        if (style == null) return;
+
+        if (style.pickupEffect != null)
+        {
+            HitEffects.Spawn(style.pickupEffect, transform.position, Vector3.up, style.pickupEffectLifetime);
+            return;
+        }
+
+        // No artwork yet, so the same placeholder the obstacles use — tinted with this type's own
+        // baseColor, which is already the colour of the coin the player just took. Smaller and
+        // shorter than a crash burst: there are sixty-odd coins in a level and a pickup is a good
+        // thing, not an impact.
+        HitEffects.PlaceholderBurst(transform.position, Vector3.up, style.baseColor,
+                                    count: 5, speed: 3f, size: 0.07f,
+                                    lifetime: Mathf.Min(style.pickupEffectLifetime, 0.6f));
     }
 
     static string SceneName => SceneManager.GetActiveScene().name;

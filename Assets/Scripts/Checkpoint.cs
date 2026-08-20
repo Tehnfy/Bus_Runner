@@ -58,6 +58,11 @@ public class Checkpoint : MonoBehaviour
         if (Reached) return;
         Reached = true;
         ApplyLamp(true);
+
+        // Play rather than TryPlay: Reached above already guarantees this runs once per checkpoint,
+        // so a retrigger window could only ever suppress the one burst there is.
+        var effect = GetComponent<HitEffect>();
+        if (effect != null) effect.Play(transform.position, Vector3.up);
     }
 
     void ApplyLamp(bool on)

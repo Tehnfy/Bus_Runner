@@ -12,6 +12,7 @@ GameObject:
   - component: {fileID: 8392042612559649228}
   - component: {fileID: 7669283999394226754}
   - component: {fileID: 3566401173555136610}
+  - component: {fileID: 6829879676833245843}
   m_Layer: 9
   m_Name: Building
   m_TagString: Untagged
@@ -112,3 +113,22 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
+--- !u!114 &6829879676833245843
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6486604344342659464}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b6ad2c6d3fb3be24ca65d1918a9b9872, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HitEffect
+  effectPrefab: {fileID: 0}
+  lifetime: 1.2
+  retriggerDelay: 0.25
+  placeholderColor: {r: 0.75, g: 0.75, b: 0.78, a: 1}
+  placeholderCount: 10
+  placeholderSpeed: 6
+  placeholderSize: 0.12
