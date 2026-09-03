@@ -9342,6 +9342,9 @@ MonoBehaviour:
   gravity: -28
   fallGravityMultiplier: 1.5
   coyoteTime: 0.1
+  doubleJumpPower: {fileID: 11400000, guid: 0d8ebb942557f0645be4cb5928221bd6, type: 2}
+  doubleJumpHeight: 1.8
+  doubleJumpGate: 0.18
   slideDuration: 0.7
   slideHeightFraction: 0.45
   slideJumpCancelAt: 0.8
@@ -18251,7 +18254,7 @@ Transform:
   m_GameObject: {fileID: 1537192566}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.06104851, z: 0, w: 0.99813485}
-  m_LocalPosition: {x: 27.996895, y: 3.1256726, z: -13.926699}
+  m_LocalPosition: {x: 29.767395, y: 3.1256726, z: -14.144089}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

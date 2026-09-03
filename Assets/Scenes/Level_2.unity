@@ -9342,6 +9342,9 @@ MonoBehaviour:
   gravity: -28
   fallGravityMultiplier: 1.5
   coyoteTime: 0.1
+  doubleJumpPower: {fileID: 11400000, guid: 0d8ebb942557f0645be4cb5928221bd6, type: 2}
+  doubleJumpHeight: 1.8
+  doubleJumpGate: 0.18
   slideDuration: 0.7
   slideHeightFraction: 0.45
   slideJumpCancelAt: 0.8

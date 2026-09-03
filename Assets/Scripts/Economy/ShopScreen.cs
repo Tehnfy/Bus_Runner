@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -29,11 +30,22 @@ public class ShopScreen : MonoBehaviour
     [SerializeField] int detailFontSize = 22;
     [SerializeField] float rowHeight = 104f;
 
+    [Header("Section headings")]
+    [SerializeField] int headerFontSize = 24;
+    [SerializeField] float headerHeight = 48f;
+
     static readonly Color RowColor = new Color(0.16f, 0.18f, 0.23f, 0.92f);
     static readonly Color BuyColor = new Color(0.2f, 0.55f, 0.85f, 0.95f);
     static readonly Color OwnedColor = new Color(0.28f, 0.38f, 0.34f, 0.95f);
+
+    // Equipped has to be tellable from owned at a glance — they are different states with the same
+    // row, and the button label alone is a small target to read.
+    static readonly Color EquippedColor = new Color(0.25f, 0.62f, 0.42f, 0.95f);
+    static readonly Color EquipColor = new Color(0.42f, 0.4f, 0.62f, 0.95f);
+
     static readonly Color DetailColor = new Color(0.72f, 0.75f, 0.8f, 1f);
     static readonly Color RefusedColor = new Color(0.95f, 0.75f, 0.25f, 1f);
+    static readonly Color HeaderColor = new Color(0.62f, 0.68f, 0.78f, 1f);
 
     ShopItem[] items;
     Button[] buyButtons;
@@ -56,16 +68,25 @@ public class ShopScreen : MonoBehaviour
 
         CoinWallet.BalanceChanged += HandleBalanceChanged;
         ShopService.Purchased += HandlePurchased;
+        PowerLoadout.EquippedChanged += HandleEquippedChanged;
     }
 
     void OnDisable()
     {
         CoinWallet.BalanceChanged -= HandleBalanceChanged;
         ShopService.Purchased -= HandlePurchased;
+        PowerLoadout.EquippedChanged -= HandleEquippedChanged;
     }
 
     void HandleBalanceChanged(CoinType type, int balance) => Refresh();
     void HandlePurchased(ShopItem item) => Refresh();
+
+    /// <summary>
+    /// Equipping one power can unequip another, so the whole list redraws rather than the row that
+    /// was pressed. At one slot every equip displaces something, and a stale "Equipped" left on the
+    /// row that just lost its slot is the obvious way to get this wrong.
+    /// </summary>
+    void HandleEquippedChanged(string itemId, bool equipped) => Refresh();
 
     void Build()
     {
@@ -79,7 +100,23 @@ public class ShopScreen : MonoBehaviour
 
         for (int i = rows.childCount - 1; i >= 0; i--) Destroy(rows.GetChild(i).gameObject);
 
-        int count = catalog == null ? 0 : catalog.Items.Count;
+        // Grouped up front rather than drawn straight down the catalogue, so a section whose items
+        // are all missing can be skipped entirely — an empty "Powers" heading reads as a bug.
+        var sections = new List<KeyValuePair<ShopCategory, List<ShopItem>>>();
+        int count = 0;
+
+        if (catalog != null)
+        {
+            foreach (var category in CurrencyRules.DisplayOrder)
+            {
+                var found = catalog.ItemsIn(category);
+                if (found.Count == 0) continue;
+
+                sections.Add(new KeyValuePair<ShopCategory, List<ShopItem>>(category, found));
+                count += found.Count;
+            }
+        }
+
         if (emptyNotice != null) emptyNotice.gameObject.SetActive(count == 0);
         if (count == 0) return;
 
@@ -92,14 +129,38 @@ public class ShopScreen : MonoBehaviour
 
         var resolved = UiRect.ResolveFont(font, "ShopScreen");
 
-        for (int i = 0; i < count; i++)
+        // Headings are plain children of the same layout group, not tracked in the arrays above —
+        // nothing ever redraws them, so the per-item indexing stays one-to-one with `items`.
+        int index = 0;
+        foreach (var section in sections)
         {
-            var item = catalog.Items[i];
-            if (item == null) continue;
+            BuildHeader(section.Key, resolved);
 
-            items[i] = item;
-            BuildRow(i, item, resolved);
+            foreach (var item in section.Value)
+            {
+                items[index] = item;
+                BuildRow(index, item, resolved);
+                index++;
+            }
         }
+    }
+
+    void BuildHeader(ShopCategory category, TMP_FontAsset resolved)
+    {
+        var go = UiRect.Stretch(rows, category + "Header");
+
+        // Same height-on-both trap the item rows document: a stretched rect in a vertical layout
+        // group comes out zero high without the LayoutElement as well as the sizeDelta.
+        var rect = (RectTransform)go.transform;
+        rect.sizeDelta = new Vector2(rect.sizeDelta.x, headerHeight);
+
+        var element = go.AddComponent<LayoutElement>();
+        element.preferredHeight = headerHeight;
+        element.minHeight = headerHeight;
+
+        var label = MakeLabel(go.transform, "Title", new Vector2(0.03f, 0f), new Vector2(0.97f, 1f),
+            headerFontSize, HeaderColor, resolved);
+        label.text = CurrencyRules.DisplayName(category).ToUpperInvariant();
     }
 
     void BuildRow(int index, ShopItem item, TMP_FontAsset resolved)
@@ -144,7 +205,7 @@ public class ShopScreen : MonoBehaviour
         // Captured per row. A shared loop variable would send every button at the last item — the same
         // trap BuildLevelList documents.
         var captured = item;
-        button.onClick.AddListener(() => Buy(captured));
+        button.onClick.AddListener(() => Press(captured));
 
         buyButtons[index] = button;
         buyImages[index] = buttonImage;
@@ -183,8 +244,19 @@ public class ShopScreen : MonoBehaviour
         return label;
     }
 
-    void Buy(ShopItem item)
+    /// <summary>
+    /// One button, two jobs. A power the player already owns cannot be bought again, so its button
+    /// stops being a till and becomes the equip toggle — which is what makes owning and equipping
+    /// one row instead of a separate equipment screen.
+    /// </summary>
+    void Press(ShopItem item)
     {
+        if (item is PowerItem power && power.IsOwned)
+        {
+            ToggleEquip(power);
+            return;
+        }
+
         var verdict = ShopService.TryBuy(item);
 
         // Refresh happens through the Purchased event on success. A refusal raises nothing, so the
@@ -192,10 +264,35 @@ public class ShopScreen : MonoBehaviour
         if (verdict != PurchaseResult.Purchased) Refresh(item, verdict);
     }
 
-    /// <summary>Redraws every row against the current balances and inventory.</summary>
+    void ToggleEquip(PowerItem power)
+    {
+        if (PowerLoadout.IsEquipped(power.ItemId))
+            PowerLoadout.Unequip(power.ItemId);
+        else
+            PowerLoadout.Equip(power.ItemId, catalog != null ? catalog.PowerSlots : 1);
+
+        // Written straight away rather than left to the app-quit flush. Equipping is the last thing a
+        // player does before pressing Play, so the run that follows must not be able to start with
+        // the old loadout still on disk.
+        PowerLoadout.Flush();
+    }
+
+    /// <summary>Redraws every row against the current balances, inventory and loadout.</summary>
     public void Refresh()
     {
         if (items == null) return;
+
+        // A power revoked since it was equipped — by the dev wipe, or a save edited by hand — would
+        // otherwise keep granting its ability. Dropped here, where the shop already has the catalogue
+        // needed to answer whether an id is still owned.
+        PowerLoadout.DropUnowned(id =>
+        {
+            var found = catalog != null ? catalog.Find(id) : null;
+            // An id the catalogue does not know is left alone: an item pulled from the shop is not
+            // evidence that the save is wrong.
+            return found == null || found.IsOwned;
+        });
+
         for (int i = 0; i < items.Length; i++)
             if (items[i] != null) Draw(i, ShopService.CanBuy(items[i]));
     }
@@ -213,12 +310,30 @@ public class ShopScreen : MonoBehaviour
         var item = items[index];
         bool buyable = verdict == PurchaseResult.Purchased;
 
+        // An owned power is the one row that is neither buyable nor finished with — it still has a
+        // decision left on it, which is what the rest of this method branches on.
+        bool ownedPower = item is PowerItem && item.IsOwned;
+        bool equipped = ownedPower && PowerLoadout.IsEquipped(item.ItemId);
+
         // A consumable's stock belongs next to its name — it is the number that changes as you buy,
         // and the only way to tell a fifth revive from a first.
         string suffix = item is ConsumableItem consumable && consumable.Stock > 0
             ? $"   x{consumable.Stock}"
             : string.Empty;
         nameLabels[index].text = item.DisplayName + suffix;
+
+        if (ownedPower)
+        {
+            // The description has done its job by the time it is bought; what the player needs now is
+            // which state the power is in and that the button will change it.
+            detailLabels[index].text = equipped ? "Equipped — tap to remove" : "Owned — tap to equip";
+            detailLabels[index].color = DetailColor;
+
+            buyLabels[index].text = equipped ? "Equipped" : "Equip";
+            buyButtons[index].interactable = true;
+            buyImages[index].color = equipped ? EquippedColor : EquipColor;
+            return;
+        }
 
         // The description while it can be bought, the reason once it cannot. A row that is refused is
         // asking a question the description does not answer.

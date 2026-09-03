@@ -29,6 +29,21 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Grace period after leaving the ground where a jump still registers.")]
     [SerializeField] float coyoteTime = 0.1f;
 
+    [Header("Double jump")]
+    [Tooltip("The power that has to be owned AND equipped for the air jump to exist. Left empty, " +
+             "there is no double jump at all — which is the correct behaviour for a scene that has " +
+             "not been given the shop asset rather than a silent always-on ability.")]
+    [SerializeField] PowerItem doubleJumpPower;
+
+    [Tooltip("Height of the second jump, measured from wherever it is used. Lower than the ground " +
+             "jump on purpose: an air jump that matched it would make the ground jump pointless.")]
+    [SerializeField] float doubleJumpHeight = 1.8f;
+
+    [Tooltip("How long after leaving the ground the second tap starts counting. This is the guard " +
+             "against a fumbled double-tap spending the air jump the instant the first one fires — " +
+             "presses inside this window fall through to the normal landing buffer instead.")]
+    [SerializeField] float doubleJumpGate = 0.18f;
+
     [Header("Slide")]
     [SerializeField] float slideDuration = 0.9f;
     [Tooltip("Fraction of standing height kept while sliding.")]
@@ -249,6 +264,10 @@ public class PlayerController : MonoBehaviour
     // When we left the ground, -1 while grounded. Separate from lastGroundedTime, which TryJump
     // clears to burn the coyote window and so cannot measure a fall.
     float leftGroundAt = -1f;
+
+    // Whether the air jump has been spent since the last time the feet were down. One per airborne
+    // stretch, which is what makes it a double jump rather than flight.
+    bool airJumpUsed;
     float rollEndsAt = -1f;
     float rollInputLockUntil = -1f;
     float rollDuration;
@@ -1002,7 +1021,15 @@ public class PlayerController : MonoBehaviour
         // control back before the body.
         if (!cc.enabled) return;
 
-        if (cc.isGrounded) lastGroundedTime = Time.time;
+        if (cc.isGrounded)
+        {
+            lastGroundedTime = Time.time;
+
+            // Restored on ground contact rather than in TrackAirborne's landing branch: that branch
+            // only runs on the frame a fall ends, so a runner who never left the ground would never
+            // get the air jump back after a respawn.
+            airJumpUsed = false;
+        }
 
         TrackAirborne();
 
@@ -1077,6 +1104,11 @@ public class PlayerController : MonoBehaviour
         if (!controlEnabled || ActionsBlocked) return;
         if (TryJump()) return;
 
+        // Ground jump refused, so this press is either the second tap of a double jump or one made
+        // too early to be anything. Tried before the buffer below, because a press that becomes an
+        // air jump must not also be held and re-fired on landing.
+        if (TryAirJump()) return;
+
         // Rejected. Hold one kind only: a press made in the air, which is a player asking to jump the
         // moment they land. That covers the touchdown frame, where isGrounded can still read false
         // because the router and this script both run in Update in no guaranteed order.
@@ -1116,6 +1148,58 @@ public class PlayerController : MonoBehaviour
         verticalVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
         lastGroundedTime = -999f;
         airborneJumpAt = -999f;   // spent, so leaving the ground cannot re-fire it on the way down
+        if (animator != null) animator.SetTrigger(JumpTrigger);
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the air jump has been spent since the feet were last down. Exposed so a HUD can show
+    /// the charge, and so a test can assert the mechanic fired rather than inferring it from height —
+    /// jump height is a bad proxy here, because a press refused by the gate still lands in the
+    /// landing buffer and fires a second ground jump that looks the same from the outside.
+    /// </summary>
+    public bool AirJumpSpent => airJumpUsed;
+
+    /// <summary>Whether a second tap would currently produce an air jump.</summary>
+    public bool AirJumpAvailable =>
+        DoubleJumpReady && !airJumpUsed && !IsGrounded && !IsSliding
+        && leftGroundAt >= 0f && Time.time - leftGroundAt >= doubleJumpGate;
+
+    /// <summary>Whether the double jump is both bought and currently in the loadout.</summary>
+    bool DoubleJumpReady =>
+        doubleJumpPower != null
+        && doubleJumpPower.IsUnlocked
+        && PowerLoadout.IsEquipped(doubleJumpPower.ItemId);
+
+    /// <summary>
+    /// The second jump, taken in mid-air. Called only after TryJump has already refused, so reaching
+    /// here means there was no ground and no coyote time left.
+    ///
+    /// The time gate is measured from leaving the ground rather than from the jump press, which
+    /// covers the case a press-based timer would miss: running off a ledge is not a jump, but it is
+    /// still the start of the air time the player is reacting to. It also does the job it was added
+    /// for — a fumbled double-tap lands inside the window and falls through to the landing buffer,
+    /// so the air jump is still there when it is actually wanted.
+    ///
+    /// leftGroundAt is pushed forward on success, exactly as Bounce does, so the landing after an
+    /// air jump is judged as a fall from here rather than from the original take-off — otherwise a
+    /// double jump would trip the landing roll on a drop that never happened.
+    /// </summary>
+    bool TryAirJump()
+    {
+        if (airJumpUsed || IsSliding) return false;
+
+        // Grounded means TryJump refused for some other reason — mid-slide, say. Spending the air
+        // jump on that would take it away without leaving the ground.
+        if (IsGrounded || leftGroundAt < 0f) return false;
+
+        if (Time.time - leftGroundAt < doubleJumpGate) return false;
+        if (!DoubleJumpReady) return false;
+
+        airJumpUsed = true;
+        verticalVelocity = Mathf.Sqrt(2f * Mathf.Max(0f, doubleJumpHeight) * -gravity);
+        ClearBufferedInput();
+        leftGroundAt = Time.time;
         if (animator != null) animator.SetTrigger(JumpTrigger);
         return true;
     }
@@ -1421,6 +1505,11 @@ public class PlayerController : MonoBehaviour
         // landing roll the canopy has already cancelled.
         leftGroundAt = Time.time;
 
+        // The air jump comes back with it, for the same reason: a canopy is a fresh launch, not a
+        // continuation of the arc that reached it. Arriving on one having already double jumped
+        // should not leave the player with nothing for the launch the canopy just gave them.
+        airJumpUsed = false;
+
         if (animator != null) animator.SetTrigger(JumpTrigger);
     }
 
@@ -1435,6 +1524,9 @@ public class PlayerController : MonoBehaviour
         // Dying in mid-air left leftGroundAt set, so TrackAirborne measured the fall as running from
         // before the death and fired a landing roll on the respawn's first grounded frame.
         leftGroundAt = -1f;
+        // Respawning restores the air jump too. Dying mid-double-jump and arriving at the checkpoint
+        // with it already spent would be a penalty nobody asked for.
+        airJumpUsed = false;
         verticalVelocity = 0f;
         cc.enabled = false;
         transform.position = position;

@@ -15,7 +15,17 @@ public class ShopCatalog : ScriptableObject
     [Tooltip("Display order. Mixed categories are fine — the screens filter by category themselves.")]
     [SerializeField] List<ShopItem> items = new List<ShopItem>();
 
+    [Header("Loadout")]
+    [Tooltip("How many powers may be equipped at once. Equipping into a full loadout takes off " +
+             "whichever was equipped longest ago, so at one slot this reads as a straight swap. " +
+             "Raise it when there are enough powers for choosing between them to be interesting.")]
+    [Min(1)]
+    [SerializeField] int powerSlots = 1;
+
     public IReadOnlyList<ShopItem> Items => items;
+
+    /// <summary>Equipped-power limit. Floored at one — a loadout of zero would make powers unusable.</summary>
+    public int PowerSlots => Mathf.Max(1, powerSlots);
 
     /// <summary>
     /// Items of one category, in catalogue order. Allocates a list per call, which is fine for the

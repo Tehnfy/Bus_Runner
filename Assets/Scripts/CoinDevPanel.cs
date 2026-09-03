@@ -128,12 +128,15 @@ public class CoinDevPanel : MonoBehaviour
                 // Coins deliberately untouched. Wiping what was bought without refunding what it cost
                 // is the useful shape for testing a shop: the tester keeps the balance they earned and
                 // gets to make the purchase again.
-                cleared = PlayerInventory.ResetAll();
+                //
+                // The loadout goes with the inventory. Powers equipped but no longer owned would be a
+                // save that disagrees with itself, and gameplay checks both.
+                cleared = PlayerInventory.ResetAll() + PowerLoadout.Clear();
                 break;
             default:
                 // Everything means everything. Clearing the coins but leaving the purchases behind
                 // would read as a wipe that quietly kept half the save.
-                cleared = CoinWallet.ResetAll() + PlayerInventory.ResetAll();
+                cleared = CoinWallet.ResetAll() + PlayerInventory.ResetAll() + PowerLoadout.Clear();
                 break;
         }
 

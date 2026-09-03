@@ -28,8 +28,36 @@ public static class CurrencyRules
 {
     static readonly ShopCategory[] AllCategories = (ShopCategory[])Enum.GetValues(typeof(ShopCategory));
 
+    // The order the shop shows its sections in, which is not the order the enum happens to declare
+    // them. Progression first because a level is the thing a player is most likely to be saving for;
+    // consumables last because they are the cheapest and the most repeatable.
+    static readonly ShopCategory[] Order =
+    {
+        ShopCategory.Progression,
+        ShopCategory.Power,
+        ShopCategory.Consumable,
+    };
+
     /// <summary>Every category, for menus that want to enumerate without depending on the enum shape.</summary>
     public static ShopCategory[] Categories => AllCategories;
+
+    /// <summary>Categories in the order the shop draws them.</summary>
+    public static ShopCategory[] DisplayOrder => Order;
+
+    /// <summary>
+    /// The section heading a player sees. Separate from the enum name on purpose — "Progression" is
+    /// what the code calls the idea, "Levels" is what the thing being sold actually is.
+    /// </summary>
+    public static string DisplayName(ShopCategory category)
+    {
+        switch (category)
+        {
+            case ShopCategory.Progression: return "Levels";
+            case ShopCategory.Power: return "Powers";
+            case ShopCategory.Consumable: return "Consumables";
+            default: return category.ToString();
+        }
+    }
 
     /// <summary>Which coin pays for this category.</summary>
     public static CoinType CurrencyFor(ShopCategory category)
