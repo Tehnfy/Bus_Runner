@@ -55,13 +55,21 @@ public class ShopCatalog : ScriptableObject
         return open;
     }
 
-    /// <summary>Whether this scene is gated at all. An ungated level is playable without a purchase.</summary>
-    public bool IsGated(string sceneName)
+    /// <summary>
+    /// The unlock that gates this scene, or null if nothing does. What the level select reads to put
+    /// a price on a locked row — it needs the item itself, not merely the fact that one exists.
+    /// </summary>
+    public LevelUnlockItem UnlockFor(string sceneName)
     {
+        if (string.IsNullOrEmpty(sceneName)) return null;
+
         foreach (var item in items)
-            if (item is LevelUnlockItem level && level.SceneName == sceneName) return true;
-        return false;
+            if (item is LevelUnlockItem level && level.SceneName == sceneName) return level;
+        return null;
     }
+
+    /// <summary>Whether this scene is gated at all. An ungated level is playable without a purchase.</summary>
+    public bool IsGated(string sceneName) => UnlockFor(sceneName) != null;
 
 #if UNITY_EDITOR
     /// <summary>

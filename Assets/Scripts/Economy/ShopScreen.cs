@@ -150,6 +150,15 @@ public class ShopScreen : MonoBehaviour
         buyImages[index] = buttonImage;
         buyLabels[index] = MakeLabel(buttonGo.transform, "Label", Vector2.zero, Vector2.one,
             detailFontSize + 2, Color.white, resolved);
+
+        // The buy label is the one that has to hold an unknown amount of text: a single-currency
+        // price is "2 Gold", but a two-currency one is "2 Gold + 10 Silver" in the same narrow
+        // button. Auto-sizing shrinks it to fit rather than letting it run off the edge — the rest of
+        // the labels keep a fixed size, because their boxes are wide enough not to need it.
+        var buyLabel = buyLabels[index];
+        buyLabel.enableAutoSizing = true;
+        buyLabel.fontSizeMin = 14f;
+        buyLabel.fontSizeMax = detailFontSize + 2;
     }
 
     TMP_Text MakeLabel(Transform parent, string name, Vector2 anchorMin, Vector2 anchorMax,
@@ -216,7 +225,7 @@ public class ShopScreen : MonoBehaviour
         detailLabels[index].text = buyable ? item.Description : ShopService.Explain(item, verdict);
         detailLabels[index].color = buyable ? DetailColor : RefusedColor;
 
-        buyLabels[index].text = $"{item.Cost} {CurrencyRules.DisplayName(item.Currency)}";
+        buyLabels[index].text = ShopService.PriceText(item);
         buyButtons[index].interactable = buyable;
         buyImages[index].color = verdict == PurchaseResult.AlreadyOwned ? OwnedColor : BuyColor;
     }

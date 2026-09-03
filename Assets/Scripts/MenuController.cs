@@ -39,7 +39,14 @@ public class MenuController : MonoBehaviour
 
     // Matches the hand-placed buttons, so a generated row does not look bolted on.
     static readonly Color LevelButtonColor = new Color(0.2f, 0.55f, 0.85f, 0.9f);
+
+    // Drained of the blue rather than merely dimmed. A locked row has to read as a different kind of
+    // thing at a glance, not as the same button rendered badly.
+    static readonly Color LockedButtonColor = new Color(0.22f, 0.24f, 0.28f, 0.9f);
+    static readonly Color LockedLabelColor = new Color(0.66f, 0.68f, 0.72f, 1f);
+
     const int LevelButtonFontSize = 44;
+    const int LockedPriceFontSize = 26;
     const float LevelButtonHeight = 96f;
 
     [Tooltip("Everything for sale, and what the player owns of it. Leave empty and every level is " +
@@ -81,6 +88,19 @@ public class MenuController : MonoBehaviour
         if (catalog == null || !catalog.IsGated(sceneName)) return true;
         return catalog.UnlockedScenes().Contains(sceneName);
     }
+
+    // Subscribed for the whole life of the menu, not just while the level select is showing: the
+    // purchase happens on the shop panel, which means the level list is switched off at the moment
+    // the thing that changes it lands.
+    //
+    // OwnedChanged rather than ShopService.Purchased, and only that one. A level unlock grants
+    // itself through PlayerInventory.MarkOwned, so this fires for a purchase — and it also fires for
+    // the dev panel's wipe, which is a revoke and raises no Purchased event at all. Listening to
+    // both would rebuild the list twice for every purchase and still miss nothing extra.
+    void OnEnable() => PlayerInventory.OwnedChanged += HandleOwnedChanged;
+    void OnDisable() => PlayerInventory.OwnedChanged -= HandleOwnedChanged;
+
+    void HandleOwnedChanged(string itemId, bool owned) => BuildLevelList();
 
     void Start()
     {
@@ -187,48 +207,109 @@ public class MenuController : MonoBehaviour
 
     /// <summary>
     /// Builds the level list in code rather than from hand-placed buttons: adding a level
-    /// is then one string in the inspector, and the row count follows UnlockedCount for
-    /// free once unlock logic exists.
+    /// is then one string in the inspector, and the row count follows the level list for free.
+    ///
+    /// Every level gets a row, locked ones included. Hiding a locked level was what this did while
+    /// nothing could be unlocked, and it is the wrong answer now something can: a player cannot want
+    /// to buy a level they have never been shown. A locked row is drained of colour, says what it
+    /// costs, and opens the shop instead of the level.
     /// </summary>
     void BuildLevelList()
     {
         if (levelList == null) return;
 
         for (int i = levelList.childCount - 1; i >= 0; i--)
-            Destroy(levelList.GetChild(i).gameObject);
+        {
+            var stale = levelList.GetChild(i);
+            // Unparented before it is destroyed. Destroy only takes effect at the end of the frame,
+            // so on a rebuild the old rows would otherwise still be in the layout group alongside the
+            // new ones for a frame — a visible double list every time a level is bought.
+            stale.SetParent(null, false);
+            Destroy(stale.gameObject);
+        }
 
         var font = BuiltinFont();
-        int count = Mathf.Clamp(UnlockedCount, 0, levelScenes.Length);
+        int open = Mathf.Clamp(UnlockedCount, 0, levelScenes.Length);
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < levelScenes.Length; i++)
         {
             int index = i;   // captured per row — a shared loop variable would send every button to the last level
+
+            // The prefix rule, not IsUnlocked on its own: buying level 3 while 2 is still locked
+            // must not make 3 startable, or the gate on 2 stops meaning anything. UnlockedCount is
+            // where that rule lives, and this is the same count the Play button obeys.
+            bool unlocked = index < open;
 
             var go = new GameObject(levelScenes[index] + "Button", typeof(RectTransform));
             go.transform.SetParent(levelList, false);
 
             var image = go.AddComponent<Image>();
-            image.color = LevelButtonColor;
+            image.color = unlocked ? LevelButtonColor : LockedButtonColor;
 
             // The parent's VerticalLayoutGroup drives width; height has to come from here.
             go.AddComponent<LayoutElement>().preferredHeight = LevelButtonHeight;
 
             var button = go.AddComponent<Button>();
             button.targetGraphic = image;
-            button.onClick.AddListener(() => LoadLevel(index));
 
-            var labelGo = UiRect.Stretch(go.transform, "Label");
+            // Left interactable while locked, on purpose. A dead button tells the player nothing
+            // about how to open the level; this one takes them to the thing that sells it.
+            if (unlocked) button.onClick.AddListener(() => LoadLevel(index));
+            else button.onClick.AddListener(ShowShop);
 
-            var label = labelGo.AddComponent<TextMeshProUGUI>();
-            label.font = font;
-            label.fontSize = LevelButtonFontSize;
-            label.alignment = TextAlignmentOptions.Midline;
-            label.color = Color.white;
-            // Overflow rather than TMP's default Truncate: a level name too long for its row should
-            // be visibly wrong instead of vanishing.
-            label.overflowMode = TextOverflowModes.Overflow;
+            var label = MakeLevelLabel(go.transform, "Label", font, LevelButtonFontSize,
+                                       unlocked ? Color.white : LockedLabelColor);
             label.text = levelScenes[index].Replace('_', ' ').ToUpperInvariant();
+
+            if (unlocked) continue;
+
+            // The name lifts to make room for the price underneath, rather than the two labels
+            // sharing a centre line and overlapping.
+            var labelRect = (RectTransform)label.transform;
+            labelRect.anchorMin = new Vector2(0f, 0.34f);
+            labelRect.anchorMax = new Vector2(1f, 1f);
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            var price = MakeLevelLabel(go.transform, "Price", font, LockedPriceFontSize, LockedLabelColor);
+            var priceRect = (RectTransform)price.transform;
+            priceRect.anchorMin = new Vector2(0f, 0.04f);
+            priceRect.anchorMax = new Vector2(1f, 0.34f);
+            priceRect.offsetMin = Vector2.zero;
+            priceRect.offsetMax = Vector2.zero;
+            price.text = LockedPriceText(levelScenes[index]);
         }
+    }
+
+    /// <summary>
+    /// "LOCKED — 2 GOLD + 10 SILVER", or plain "LOCKED" when nothing in the catalogue prices this
+    /// scene. The price comes from ShopService so the level select and the shop never disagree about
+    /// what something costs.
+    /// </summary>
+    string LockedPriceText(string sceneName)
+    {
+        var unlock = catalog == null ? null : catalog.UnlockFor(sceneName);
+        if (unlock == null || !unlock.Purchasable) return "LOCKED";
+
+        return ("LOCKED  —  " + ShopService.PriceText(unlock)).ToUpperInvariant();
+    }
+
+    TMP_Text MakeLevelLabel(Transform parent, string name, TMP_FontAsset font, int size, Color color)
+    {
+        var go = UiRect.Stretch(parent, name);
+
+        var label = go.AddComponent<TextMeshProUGUI>();
+        label.font = font;
+        label.fontSize = size;
+        label.alignment = TextAlignmentOptions.Midline;
+        label.color = color;
+        // Overflow rather than TMP's default Truncate: a level name too long for its row should
+        // be visibly wrong instead of vanishing.
+        label.overflowMode = TextOverflowModes.Overflow;
+        // Nothing here is clickable in its own right — the row's button is. A label that swallowed
+        // the raycast would leave a dead patch across the middle of the button.
+        label.raycastTarget = false;
+        return label;
     }
 
     TMP_FontAsset BuiltinFont() => UiRect.ResolveFont(levelButtonFont, "MenuController");

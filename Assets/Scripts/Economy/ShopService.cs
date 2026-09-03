@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Text;
 
 /// <summary>
 /// The one place a purchase happens. Everything else asks it a question or listens to what it did.
@@ -39,7 +41,10 @@ public static class ShopService
         // told to go and earn coins they would not be allowed to spend.
         if (item is ConsumableItem consumable && !consumable.HasRoom) return PurchaseResult.AtCap;
 
-        if (!CoinWallet.CanAfford(item.Currency, item.Cost)) return PurchaseResult.CannotAfford;
+        // Every currency in the price, not just the category's own. One coin short of one line is one
+        // coin short of the purchase.
+        foreach (var part in item.Price)
+            if (!CoinWallet.CanAfford(part.currency, part.amount)) return PurchaseResult.CannotAfford;
 
         return PurchaseResult.Purchased;
     }
@@ -54,7 +59,7 @@ public static class ShopService
 
         // Re-checked through TrySpend rather than trusted from CanAfford above: the two are separated
         // by nothing today, but a balance that moved between them must lose the item, not the coins.
-        if (!CoinWallet.TrySpend(item.Currency, item.Cost)) return PurchaseResult.CannotAfford;
+        if (!Pay(item)) return PurchaseResult.CannotAfford;
 
         item.Grant();
 
@@ -65,6 +70,30 @@ public static class ShopService
 
         Purchased?.Invoke(item);
         return PurchaseResult.Purchased;
+    }
+
+    /// <summary>
+    /// Takes every coin in the price, or takes none of them.
+    ///
+    /// A single-currency price cannot fail here once CanBuy has passed, but a multi-currency one has
+    /// a real partial state: the gold goes, and the silver is a coin short. Charging half a price and
+    /// granting nothing is the one outcome a player would never forgive, so anything already taken is
+    /// handed straight back and the purchase is refused as though it had never started.
+    ///
+    /// Refund rather than Add, so an unwound payment does not show up on the HUD as coins earned.
+    /// </summary>
+    static bool Pay(ShopItem item)
+    {
+        var price = item.Price;
+
+        int paid = 0;
+        while (paid < price.Count && CoinWallet.TrySpend(price[paid].currency, price[paid].amount))
+            paid++;
+
+        if (paid == price.Count) return true;
+
+        for (int i = 0; i < paid; i++) CoinWallet.Refund(price[i].currency, price[i].amount);
+        return false;
     }
 
     /// <summary>
@@ -110,11 +139,50 @@ public static class ShopService
                 var required = Prerequisite(item);
                 return required == null ? "Locked" : $"Requires {required.DisplayName}";
             case PurchaseResult.CannotAfford:
-                if (item == null) return "Cannot afford";
-                int shortfall = item.Cost - CoinWallet.Balance(item.Currency);
-                return $"Need {shortfall} more {CurrencyRules.DisplayName(item.Currency)}";
+                return Shortfall(item);
             default:
                 return "Unavailable";
         }
+    }
+
+    /// <summary>
+    /// "Need 2 more Gold and 5 more Silver". Every coin that is short, not just the first one found —
+    /// a player told to go and earn gold, who then comes back still unable to buy because the silver
+    /// was also short, has been told half the truth twice.
+    /// </summary>
+    static string Shortfall(ShopItem item)
+    {
+        if (item == null) return "Cannot afford";
+
+        var missing = new List<string>();
+        foreach (var part in item.Price)
+        {
+            int short_ = part.amount - CoinWallet.Balance(part.currency);
+            if (short_ > 0) missing.Add($"{short_} more {CurrencyRules.DisplayName(part.currency)}");
+        }
+
+        // Nothing missing means a balance moved between the check and this call. Vague on purpose:
+        // naming a coin that is no longer short would be worse than saying nothing about which.
+        return missing.Count == 0 ? "Cannot afford" : "Need " + string.Join(" and ", missing);
+    }
+
+    /// <summary>
+    /// The price as one line — "2 Gold", or "2 Gold + 10 Silver". Lives here rather than on the shop
+    /// row so the level select, the shop and anything else that shows a price all word it the same.
+    /// </summary>
+    public static string PriceText(ShopItem item)
+    {
+        if (item == null) return string.Empty;
+
+        var price = item.Price;
+        if (price.Count == 0) return "Free";
+
+        var text = new StringBuilder();
+        for (int i = 0; i < price.Count; i++)
+        {
+            if (i > 0) text.Append(" + ");
+            text.Append(price[i].amount).Append(' ').Append(CurrencyRules.DisplayName(price[i].currency));
+        }
+        return text.ToString();
     }
 }

@@ -81,7 +81,23 @@ public static class CoinWallet
         foreach (var type in AllTypes) BalanceChanged?.Invoke(type, balances[(int)type]);
     }
 
-    public static void Add(CoinType type, int amount)
+    public static void Add(CoinType type, int amount) => Add(type, amount, countsAsPickup: true);
+
+    /// <summary>
+    /// Puts coins back without counting them as picked up this run.
+    ///
+    /// For unwinding a payment that could not be completed — a multi-currency price where the second
+    /// coin failed after the first was taken. Routed through here rather than through Add because a
+    /// refund is not a pickup: adding it normally would inflate the run tally on the HUD, so a failed
+    /// purchase would read as having earned the player coins.
+    /// </summary>
+    public static void Refund(CoinType type, int amount)
+    {
+        if (amount <= 0) return;
+        Add(type, amount, countsAsPickup: false);
+    }
+
+    static void Add(CoinType type, int amount, bool countsAsPickup)
     {
         if (amount == 0) return;
         EnsureLoaded();
@@ -94,7 +110,7 @@ public static class CoinWallet
         dirty = true;
 
         // Gains only. Spending in the shop is not something the run tally should count backwards.
-        if (amount > 0) session[index] += amount;
+        if (amount > 0 && countsAsPickup) session[index] += amount;
 
         BalanceChanged?.Invoke(type, balances[index]);
     }

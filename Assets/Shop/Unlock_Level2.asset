@@ -17,6 +17,9 @@ MonoBehaviour:
   description: Opens Level 2 in the level select.
   icon: {fileID: 0}
   cost: 2
+  extraCosts:
+  - currency: 1
+    amount: 25
   prerequisite: {fileID: 0}
   available: 1
   sceneName: Level_2
